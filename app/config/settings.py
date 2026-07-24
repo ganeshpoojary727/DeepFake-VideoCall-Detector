@@ -1,8 +1,7 @@
 """
-Application-wide configuration.
+Application configuration.
 
-This file contains all configurable values used throughout
-the DeepFake Video Call Detector application.
+All project-wide settings should be defined here.
 """
 
 from pathlib import Path
@@ -10,49 +9,50 @@ import torch
 
 
 class Settings:
-    """Central application settings."""
 
-    # -----------------------------
-    # Project Paths
-    # -----------------------------
+    def __init__(self):
 
-    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+        # ------------------------
+        # Project Directories
+        # ------------------------
 
-    APP_DIR = PROJECT_ROOT / "app"
+        self.PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-    DATASET_DIR = PROJECT_ROOT / "datasets"
+        self.APP_DIR = self.PROJECT_ROOT / "app"
 
-    MODEL_DIR = PROJECT_ROOT / "trained_models"
+        self.DATASET_DIR = self.PROJECT_ROOT / "datasets"
 
-    LOG_DIR = PROJECT_ROOT / "logs"
+        self.MODEL_DIR = self.PROJECT_ROOT / "trained_models"
 
-    # -----------------------------
-    # Device
-    # -----------------------------
+        self.LOG_DIR = self.PROJECT_ROOT / "logs"
 
-    DEVICE = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
+        # ------------------------
+        # Device
+        # ------------------------
 
-    # -----------------------------
-    # Audio
-    # -----------------------------
+        self.DEVICE = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
 
-    SAMPLE_RATE = 16000
+        # ------------------------
+        # Audio Configuration
+        # ------------------------
 
-    N_MELS = 128
+        self.SAMPLE_RATE = 16000
 
-    TARGET_LENGTH = 100
+        self.N_MELS = 128
 
-    N_FFT = 2048
+        self.N_FFT = 2048
 
-    HOP_LENGTH = 512
+        self.HOP_LENGTH = 512
 
-    # -----------------------------
-    # Prediction
-    # -----------------------------
+        self.TARGET_LENGTH = 100
 
-    CONFIDENCE_THRESHOLD = 0.70
+        # ------------------------
+        # Prediction
+        # ------------------------
+
+        self.CONFIDENCE_THRESHOLD = 0.70
 
 
 settings = Settings()

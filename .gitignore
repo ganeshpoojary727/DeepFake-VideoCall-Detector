@@ -9,14 +9,14 @@ __pycache__/
 # VS Code
 .vscode/
 
+# Logs
+logs/
+
 # Datasets
 datasets/
 
 # Trained Models
 trained_models/
-
-# Logs
-logs/
 
 # Environment Variables
 .env
