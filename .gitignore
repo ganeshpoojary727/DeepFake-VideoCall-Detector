@@ -1,0 +1,22 @@
+# Virtual Environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
+
+# Datasets
+datasets/
+
+# Trained Models
+trained_models/
+
+# Logs
+logs/
+
+# Environment Variables
+.env
