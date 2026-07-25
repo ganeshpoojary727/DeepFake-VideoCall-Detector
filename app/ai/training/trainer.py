@@ -8,10 +8,12 @@ class Trainer:
         self,
         model,
         train_loader,
+        validation_loader,
         optimizer,
         criterion,
         device
     ):
+        self.validation_loader = validation_loader
         self.model = model
         self.train_loader = train_loader
         self.optimizer = optimizer
@@ -19,34 +21,68 @@ class Trainer:
         self.device = device
     def train_one_epoch(self):
 
-      self.model.train()
+     self.model.train()
 
-      running_loss = 0.0
+     running_loss = 0.0
+     correct = 0
+     total = 0
 
-      for features, labels in self.train_loader:
+     for features, labels in self.train_loader:
 
-        # Move data to GPU/CPU
         features = features.to(self.device)
         labels = labels.to(self.device)
 
-        # Clear old gradients
         self.optimizer.zero_grad()
 
-        # Forward pass
         outputs = self.model(features)
 
-        # Calculate loss
+        _, predicted = torch.max(outputs, 1)
+
+        correct += (predicted == labels).sum().item()
+        total += labels.size(0)
+
         loss = self.criterion(outputs, labels)
 
-        # Backpropagation
         loss.backward()
 
-        # Update weights
         self.optimizer.step()
 
-        # Add batch loss
         running_loss += loss.item()
 
-      epoch_loss = running_loss / len(self.train_loader)
+     epoch_loss = running_loss / len(self.train_loader)
 
-      return epoch_loss
+     epoch_accuracy = 100 * correct / total
+
+     return epoch_loss, epoch_accuracy
+    def validate(self):
+
+     self.model.eval()
+
+     running_loss = 0.0
+
+     correct = 0
+     total = 0
+
+     with torch.no_grad():
+
+        for features, labels in self.validation_loader:
+
+            features = features.to(self.device)
+            labels = labels.to(self.device)
+
+            outputs = self.model(features)
+
+            loss = self.criterion(outputs, labels)
+
+            _, predicted = torch.max(outputs, 1)
+
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+            running_loss += loss.item()
+
+     epoch_loss = running_loss / len(self.validation_loader)
+
+     epoch_accuracy = 100 * correct / total
+
+     return epoch_loss, epoch_accuracy
