@@ -5,11 +5,11 @@ import torch.nn as nn
 # CNN MODEL
 # ----------------------------------------------------
 
-class DeepfakeCNN(nn.Module):
+class DeepFakeCNN(nn.Module):
 
     def __init__(self):
 
-        super(DeepfakeCNN, self).__init__()
+        super().__init__()
 
         # ---------------------------------------------
         # CONVOLUTION BLOCK 1
@@ -102,21 +102,18 @@ class DeepfakeCNN(nn.Module):
     # ----------------------------------------------------
 
     def forward(self, x):
+      
+      x = self.conv_block1(x)
+      x = self.conv_block2(x)
+      x = self.conv_block3(x)
 
-        x = self.conv_block1(x)
+      x = self.flatten(x)
 
-        x = self.conv_block2(x)
+      x = self.fc1(x)
+      x = self.relu(x)
+      x = self.dropout(x)
+      x = self.fc2(x)
 
-        x = self.conv_block3(x)
+      return x
 
-        x = self.flatten(x)
-
-        x = self.fc1(x)
-
-        x = self.relu(x)
-
-        x = self.dropout(x)
-
-        x = self.fc2(x)
-
-        return x
+        
