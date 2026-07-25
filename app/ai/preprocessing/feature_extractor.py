@@ -99,12 +99,12 @@ class FeatureExtractor:
      """
 
      mel_tensor = torch.tensor(
-      mel_db,
-      dtype=torch.float32,
-      device=settings.DEVICE
+    mel_db,
+    dtype=torch.float32
 )
 
      mel_tensor = mel_tensor.unsqueeze(0)
+
      return mel_tensor
     def extract(
       self,
