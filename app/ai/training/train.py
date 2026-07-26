@@ -38,12 +38,23 @@ trainer = Trainer(
     device=device
 )
 
-num_epochs = 10
+num_epochs = 3
+best_val_accuracy = 0.0
 
 for epoch in range(num_epochs):
 
     loss,accuracy = trainer.train_one_epoch()
     val_loss, val_accuracy = trainer.validate()
+    if val_accuracy > best_val_accuracy:
+
+     best_val_accuracy = val_accuracy
+
+     torch.save(
+        model.state_dict(),
+        "trained_models/best_model.pth"
+    )
+
+    print("✅ Best model saved!")
 
     print(
     f"Epoch [{epoch + 1}/{num_epochs}] | "
