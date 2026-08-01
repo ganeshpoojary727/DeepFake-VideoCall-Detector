@@ -1,375 +1,162 @@
-"""
-Training engine with production best practices.
-
-Features added over v1
-──────────────────────
-• Early stopping with configurable patience
-• Learning rate scheduler (CosineAnnealingWarmRestarts)
-• Gradient clipping
-• Mixed precision training (torch.cuda.amp)
-• TensorBoard logging
-• Checkpoint saving and resume
-• Best-model saving based on validation **loss** (not accuracy)
-• Structured logging via project logger
-"""
+"""Production Audio Trainer orchestration engine for AASIST model."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
 from pathlib import Path
-from typing import Optional
-
+from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from app.config.settings import settings
-from app.utils.logger import get_logger
+from app.audio.configs.training_config import AudioTrainingConfig
+from app.audio.training.checkpoint import CheckpointManager
+from app.audio.training.ema import EMAModel
+from app.audio.training.loss_factory import LossFactory
+from app.audio.training.optimizer import OptimizerFactory
+from app.audio.training.scheduler import SchedulerFactory
+from app.audio.training.validator import ValidationEngine
+from app.audio.utils.audio_logger import get_audio_logger
+from app.audio.utils.tensorboard_logger import TensorBoardLogger
 
-logger = get_logger(__name__)
-
-
-# ──────────────────────────────────────────────
-# Early Stopping
-# ──────────────────────────────────────────────
-
-
-class EarlyStopping:
-    """
-    Stop training when validation loss stops improving.
-
-    Parameters
-    ----------
-    patience : int
-        Number of epochs with no improvement before stopping.
-    min_delta : float
-        Minimum change to qualify as an improvement.
-    """
-
-    def __init__(self, patience: int = 5, min_delta: float = 0.001) -> None:
-        self.patience = patience
-        self.min_delta = min_delta
-        self.counter = 0
-        self.best_loss = float("inf")
-
-    def __call__(self, val_loss: float) -> bool:
-        """Return ``True`` if training should stop."""
-        if val_loss < self.best_loss - self.min_delta:
-            self.best_loss = val_loss
-            self.counter = 0
-            return False
-        self.counter += 1
-        return self.counter >= self.patience
+logger = get_audio_logger("training.trainer")
 
 
-# ──────────────────────────────────────────────
-# Epoch Metrics
-# ──────────────────────────────────────────────
-
-
-@dataclass
-class EpochMetrics:
-    """Container for per-epoch training / validation metrics."""
-
-    loss: float = 0.0
-    accuracy: float = 0.0
-    learning_rate: float = 0.0
-
-
-# ──────────────────────────────────────────────
-# Trainer
-# ──────────────────────────────────────────────
-
-
-class Trainer:
-    """
-    Full-featured training engine.
-
-    Parameters
-    ----------
-    model : nn.Module
-        The model to train.
-    train_loader : DataLoader
-        Training data loader.
-    validation_loader : DataLoader
-        Validation data loader.
-    optimizer : torch.optim.Optimizer
-        Optimiser instance.
-    criterion : nn.Module
-        Loss function.
-    device : torch.device
-        Compute device.
-    scheduler : optional
-        Learning-rate scheduler.
-    checkpoint_dir : Path | None
-        Directory for checkpoint files.
-    use_mixed_precision : bool
-        Enable AMP (automatic mixed precision).
-    gradient_clip_norm : float
-        Maximum gradient norm for clipping (0 = disabled).
-    early_stopping_patience : int
-        Early-stopping patience (0 = disabled).
-    """
+class ProductionAudioTrainer:
+    """Production training engine for AASIST audio deepfake detector."""
 
     def __init__(
         self,
         model: nn.Module,
         train_loader: DataLoader,
-        validation_loader: DataLoader,
-        optimizer: torch.optim.Optimizer,
-        criterion: nn.Module,
-        device: torch.device,
-        scheduler: Optional[object] = None,
-        checkpoint_dir: Optional[Path] = None,
-        use_mixed_precision: bool = True,
-        gradient_clip_norm: float = 1.0,
-        early_stopping_patience: int = 5,
+        val_loader: Optional[DataLoader] = None,
+        config: Optional[AudioTrainingConfig] = None,
     ) -> None:
+        self.config = config or AudioTrainingConfig()
         self.model = model
         self.train_loader = train_loader
-        self.validation_loader = validation_loader
-        self.optimizer = optimizer
-        self.criterion = criterion
-        self.device = device
-        self.scheduler = scheduler
-        self.gradient_clip_norm = gradient_clip_norm
+        self.val_loader = val_loader
 
-        # Mixed precision
-        self.use_amp = use_mixed_precision and device.type == "cuda"
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+
+        # Factories
+        self.optimizer = OptimizerFactory(self.config).create_optimizer(self.model)
+        self.scheduler = SchedulerFactory(self.config).create_scheduler(
+            self.optimizer, steps_per_epoch=len(train_loader)
+        )
+        self.criterion = LossFactory(self.config).create_loss()
+
+        # Components
+        self.validator = ValidationEngine(self.model, device=str(self.device))
+        self.checkpoint_manager = CheckpointManager(
+            checkpoint_dir=self.config.checkpoint_dir,
+            max_to_keep=3,
+        )
+        self.tb_logger = TensorBoardLogger(log_dir=self.config.tensorboard_dir)
+        self.ema = EMAModel(self.model, decay=self.config.ema_decay) if self.config.use_ema else None
+
+        # AMP
+        self.use_amp = self.config.use_amp and self.device.type == "cuda"
         self.scaler = torch.amp.GradScaler("cuda") if self.use_amp else None
 
-        # Early stopping
-        self.early_stopping: Optional[EarlyStopping] = None
-        if early_stopping_patience > 0:
-            self.early_stopping = EarlyStopping(patience=early_stopping_patience)
-
-        # Checkpointing
-        self.checkpoint_dir = checkpoint_dir
-        if self.checkpoint_dir is not None:
-            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-        # Best model tracking
         self.best_val_loss = float("inf")
+        self.history: Dict[str, List[float]] = {"train_loss": [], "val_loss": [], "val_acc": [], "val_eer": []}
 
-        # TensorBoard writer (lazy)
-        self._writer = None
-
-    # ── TensorBoard ───────────────────────────
-
-    def _get_writer(self):
-        """Lazily initialise a TensorBoard SummaryWriter."""
-        if self._writer is None:
-            try:
-                from torch.utils.tensorboard import SummaryWriter
-                self._writer = SummaryWriter(log_dir=str(settings.TENSORBOARD_DIR))
-                logger.info("TensorBoard logging to %s", settings.TENSORBOARD_DIR)
-            except ImportError:
-                logger.info("tensorboard not installed — skipping TB logging")
-        return self._writer
-
-    def _log_scalars(self, tag_prefix: str, metrics: EpochMetrics, epoch: int) -> None:
-        writer = self._get_writer()
-        if writer is None:
-            return
-        writer.add_scalar(f"{tag_prefix}/loss", metrics.loss, epoch)
-        writer.add_scalar(f"{tag_prefix}/accuracy", metrics.accuracy, epoch)
-        if metrics.learning_rate > 0:
-            writer.add_scalar("lr", metrics.learning_rate, epoch)
-
-    # ── Training ──────────────────────────────
-
-    def train_one_epoch(self) -> EpochMetrics:
-        """Run one training epoch and return metrics."""
+    def train_epoch(self, epoch: int) -> float:
+        """Execute single epoch iteration with gradient accumulation and AMP."""
         self.model.train()
         running_loss = 0.0
-        correct = 0
-        total = 0
+        self.optimizer.zero_grad(set_to_none=True)
 
-        for features, labels in self.train_loader:
-            features = features.to(self.device, non_blocking=True)
-            labels = labels.to(self.device, non_blocking=True)
+        for step, batch in enumerate(self.train_loader):
+            if isinstance(batch, dict):
+                x = batch["tensor"].to(self.device, non_blocking=True)
+                y = batch["label"].to(self.device, non_blocking=True)
+            else:
+                x, y = batch[0].to(self.device), batch[1].to(self.device)
 
-            self.optimizer.zero_grad(set_to_none=True)
-
-            # ── Mixed precision forward ───────
-            if self.use_amp:
+            if self.use_amp and self.scaler is not None:
                 with torch.amp.autocast("cuda"):
-                    outputs = self.model(features)
-                    loss = self.criterion(outputs, labels)
+                    logits = self.model(x)
+                    loss = self.criterion(logits, y) / self.config.grad_accum_steps
                 self.scaler.scale(loss).backward()
 
-                # Gradient clipping
-                if self.gradient_clip_norm > 0:
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.gradient_clip_norm
-                    )
-
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+                if (step + 1) % self.config.grad_accum_steps == 0:
+                    if self.config.gradient_clip_norm > 0:
+                        self.scaler.unscale_(self.optimizer)
+                        nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_norm)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    self.optimizer.zero_grad(set_to_none=True)
             else:
-                outputs = self.model(features)
-                loss = self.criterion(outputs, labels)
+                logits = self.model(x)
+                loss = self.criterion(logits, y) / self.config.grad_accum_steps
                 loss.backward()
 
-                if self.gradient_clip_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.gradient_clip_norm
-                    )
+                if (step + 1) % self.config.grad_accum_steps == 0:
+                    if self.config.gradient_clip_norm > 0:
+                        nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_norm)
+                    self.optimizer.step()
+                    self.optimizer.zero_grad(set_to_none=True)
 
-                self.optimizer.step()
+            if self.ema is not None:
+                self.ema.update(self.model)
 
-            running_loss += loss.item()
-            predicted = outputs.argmax(dim=1)
-            correct += (predicted == labels).sum().item()
-            total += labels.size(0)
+            running_loss += loss.item() * self.config.grad_accum_steps
 
-        epoch_loss = running_loss / max(len(self.train_loader), 1)
-        epoch_accuracy = (correct / max(total, 1)) * 100
+        epoch_loss = running_loss / len(self.train_loader)
+        return float(epoch_loss)
 
-        current_lr = self.optimizer.param_groups[0]["lr"]
+    def train(self) -> Dict[str, Any]:
+        """Execute complete multi-epoch training pipeline."""
+        logger.info("Starting AASIST training — %d epochs, device=%s", self.config.epochs, self.device)
 
-        return EpochMetrics(
-            loss=epoch_loss, accuracy=epoch_accuracy, learning_rate=current_lr
-        )
+        for epoch in range(1, self.config.epochs + 1):
+            train_loss = self.train_epoch(epoch)
+            self.history["train_loss"].append(train_loss)
 
-    # ── Validation ────────────────────────────
+            val_metrics = {}
+            if self.val_loader is not None:
+                val_metrics = self.validator.evaluate(self.val_loader, self.criterion)
+                val_loss = val_metrics.get("val_loss", 0.0)
+                val_acc = val_metrics.get("accuracy", 0.0)
+                val_eer = val_metrics.get("eer", 0.0)
 
-    def validate(self) -> EpochMetrics:
-        """Run validation and return metrics."""
-        self.model.eval()
-        running_loss = 0.0
-        correct = 0
-        total = 0
+                self.history["val_loss"].append(val_loss)
+                self.history["val_acc"].append(val_acc)
+                self.history["val_eer"].append(val_eer)
 
-        with torch.no_grad():
-            for features, labels in self.validation_loader:
-                features = features.to(self.device, non_blocking=True)
-                labels = labels.to(self.device, non_blocking=True)
+                if val_loss < self.best_val_loss:
+                    self.best_val_loss = val_loss
+                    self.checkpoint_manager.save_best(self.model, epoch, val_metrics)
 
-                if self.use_amp:
-                    with torch.amp.autocast("cuda"):
-                        outputs = self.model(features)
-                        loss = self.criterion(outputs, labels)
-                else:
-                    outputs = self.model(features)
-                    loss = self.criterion(outputs, labels)
-
-                running_loss += loss.item()
-                predicted = outputs.argmax(dim=1)
-                correct += (predicted == labels).sum().item()
-                total += labels.size(0)
-
-        epoch_loss = running_loss / max(len(self.validation_loader), 1)
-        epoch_accuracy = (correct / max(total, 1)) * 100
-
-        return EpochMetrics(loss=epoch_loss, accuracy=epoch_accuracy)
-
-    # ── Full training run ─────────────────────
-
-    def fit(self, epochs: int, save_path: Optional[Path] = None) -> None:
-        """
-        Execute the full training loop with all bells and whistles.
-
-        Parameters
-        ----------
-        epochs : int
-            Maximum number of epochs.
-        save_path : Path | None
-            Where to save the best model.  Defaults to ``settings.MODEL_SAVE_PATH``.
-        """
-        save_path = save_path or settings.MODEL_SAVE_PATH
-
-        logger.info("═" * 50)
-        logger.info("Training started — %d epochs, device=%s", epochs, self.device)
-        logger.info("Mixed precision: %s", self.use_amp)
-        logger.info("Gradient clip norm: %s", self.gradient_clip_norm)
-        if self.early_stopping:
-            logger.info("Early stopping patience: %d", self.early_stopping.patience)
-        logger.info("═" * 50)
-
-        for epoch in range(1, epochs + 1):
-            train_metrics = self.train_one_epoch()
-            val_metrics = self.validate()
-
-            # Step scheduler
             if self.scheduler is not None:
-                self.scheduler.step()
+                if hasattr(self.scheduler, "step"):
+                    if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                        self.scheduler.step(val_metrics.get("val_loss", train_loss))
+                    else:
+                        self.scheduler.step()
 
-            # TensorBoard
-            self._log_scalars("train", train_metrics, epoch)
-            self._log_scalars("val", val_metrics, epoch)
+            # Logging & Checkpointing
+            lr = self.optimizer.param_groups[0]["lr"]
+            self.tb_logger.log_scalar("train/loss", train_loss, epoch)
+            self.tb_logger.log_scalar("train/lr", lr, epoch)
+            if val_metrics:
+                self.tb_logger.log_metrics(val_metrics, epoch, prefix="val")
 
-            # Best model saving (based on val LOSS, not accuracy)
-            if val_metrics.loss < self.best_val_loss:
-                self.best_val_loss = val_metrics.loss
-                torch.save(self.model.state_dict(), save_path)
-                logger.info("✅ Best model saved (val_loss=%.4f)", val_metrics.loss)
-
-            # Logging
-            logger.info(
-                "Epoch [%d/%d] | "
-                "Train Loss: %.4f  Acc: %.2f%% | "
-                "Val Loss: %.4f  Acc: %.2f%% | "
-                "LR: %.6f",
-                epoch,
-                epochs,
-                train_metrics.loss,
-                train_metrics.accuracy,
-                val_metrics.loss,
-                val_metrics.accuracy,
-                train_metrics.learning_rate,
+            self.checkpoint_manager.save(
+                model=self.model,
+                optimizer=self.optimizer,
+                scheduler=self.scheduler,
+                epoch=epoch,
+                metric_value=train_loss,
+                history=self.history,
             )
 
-            # Early stopping
-            if self.early_stopping and self.early_stopping(val_metrics.loss):
-                logger.info(
-                    "⏹ Early stopping triggered at epoch %d (patience=%d)",
-                    epoch,
-                    self.early_stopping.patience,
-                )
-                break
+        self.tb_logger.close()
+        return self.history
 
-        # Cleanup TensorBoard
-        writer = self._get_writer()
-        if writer is not None:
-            writer.close()
 
-        logger.info("═" * 50)
-        logger.info("Training complete — best val_loss: %.4f", self.best_val_loss)
-        logger.info("Model saved to: %s", save_path)
-        logger.info("═" * 50)
-
-    # ── Checkpoint save / load ────────────────
-
-    def save_checkpoint(self, epoch: int, path: Path) -> None:
-        """Save a full training checkpoint (model + optimizer + epoch)."""
-        checkpoint = {
-            "epoch": epoch,
-            "model_state_dict": self.model.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "best_val_loss": self.best_val_loss,
-        }
-        if self.scheduler is not None:
-            checkpoint["scheduler_state_dict"] = self.scheduler.state_dict()
-        torch.save(checkpoint, path)
-        logger.info("Checkpoint saved: %s", path)
-
-    def load_checkpoint(self, path: Path) -> int:
-        """
-        Load a training checkpoint and return the last completed epoch.
-
-        Returns
-        -------
-        int
-            The epoch number to resume from.
-        """
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-        self.model.load_state_dict(checkpoint["model_state_dict"])
-        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
-        if self.scheduler is not None and "scheduler_state_dict" in checkpoint:
-            self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        epoch = checkpoint["epoch"]
-        logger.info("Checkpoint loaded from epoch %d", epoch)
-        return epoch
+# Backward compatibility alias
+Trainer = ProductionAudioTrainer

@@ -1,96 +1,59 @@
-"""
-Audio model training configuration definitions.
-
-Provides structured dataclass configurations for model training, optimization,
-learning rate scheduling, and checkpoint retention settings.
-"""
+"""Audio model training configuration definitions."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from app.config.settings import settings
+from app.audio.constants.audio_constants import (
+    AUDIO_LOGS_DIR,
+    AUDIO_MODELS_DIR,
+    PRODUCTION_AUDIO_MODEL,
+)
 
 
 @dataclass
 class AudioTrainingConfig:
-    """
-    Configuration parameters for audio model training pipeline.
+    """Configuration parameters for audio AASIST model training pipeline."""
 
-    Parameters
-    ----------
-    batch_size : int
-        Mini-batch size for training and validation.
-    learning_rate : float
-        Initial learning rate for the optimizer.
-    epochs : int
-        Total training epochs.
-    weight_decay : float
-        L2 regularization weight decay factor.
-    use_amp : bool
-        Whether to enable Automatic Mixed Precision (AMP).
-    gradient_clip_norm : float
-        Maximum norm for gradient clipping.
-    early_stopping_patience : int
-        Epochs without validation improvement before stopping.
-    seed : int
-        Random seed for reproducibility.
-    optimizer_name : str
-        Optimizer identifier ('adam', 'adamw', 'sgd').
-    scheduler_name : str
-        Scheduler identifier ('cosine', 'plateau', 'step', 'onecycle').
-    checkpoint_dir : Path
-        Directory path for storing model checkpoints.
-    log_interval : int
-        Batch frequency for logging training progress.
-    """
-
-    batch_size: int = field(default_factory=lambda: settings.training.batch_size)
-    learning_rate: float = field(default_factory=lambda: settings.training.learning_rate)
-    epochs: int = field(default_factory=lambda: settings.training.epochs)
-    weight_decay: float = field(default_factory=lambda: settings.training.weight_decay)
-    use_amp: bool = field(default_factory=lambda: settings.training.use_mixed_precision)
-    gradient_clip_norm: float = field(
-        default_factory=lambda: settings.training.gradient_clip_norm
-    )
-    early_stopping_patience: int = field(
-        default_factory=lambda: settings.training.early_stopping_patience
-    )
-    seed: int = field(default_factory=lambda: settings.training.seed)
-    optimizer_name: str = "adamw"
-    scheduler_name: str = "cosine"
-    checkpoint_dir: Path = field(default_factory=lambda: Path(settings.MODEL_SAVE_PATH).parent)
+    model_name: str = PRODUCTION_AUDIO_MODEL
+    batch_size: int = 32
+    learning_rate: float = 1e-4
+    epochs: int = 50
+    weight_decay: float = 1e-4
+    use_amp: bool = True
+    grad_accum_steps: int = 1
+    gradient_clip_norm: float = 1.0
+    early_stopping_patience: int = 10
+    seed: int = 42
+    optimizer_name: str = "adamw"  # 'adamw', 'lion', 'sgd'
+    scheduler_name: str = "cosine"  # 'cosine', 'onecycle', 'warmup_cosine', 'plateau'
+    loss_name: str = "cross_entropy"  # 'cross_entropy', 'focal', 'label_smoothing', 'class_balanced'
+    label_smoothing: float = 0.1
+    focal_gamma: float = 2.0
+    focal_alpha: float = 1.0
+    use_ema: bool = True
+    ema_decay: float = 0.999
+    checkpoint_dir: Path = field(default_factory=lambda: Path(AUDIO_MODELS_DIR))
+    log_dir: Path = field(default_factory=lambda: Path(AUDIO_LOGS_DIR))
+    tensorboard_dir: Path = field(default_factory=lambda: Path(AUDIO_LOGS_DIR) / "tensorboard")
     log_interval: int = 10
 
     def __post_init__(self) -> None:
-        """Validate configuration parameters and resolve paths."""
+        """Resolve paths and validate parameters."""
         self.checkpoint_dir = Path(self.checkpoint_dir)
+        self.log_dir = Path(self.log_dir)
+        self.tensorboard_dir = Path(self.tensorboard_dir)
         self.validate()
 
     def validate(self) -> None:
-        """
-        Validate training hyperparameters.
-
-        Raises
-        ------
-        ValueError
-            If any hyperparameter value is out of valid bounds.
-        """
+        """Validate training hyperparameters."""
         if self.batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {self.batch_size}")
         if self.learning_rate <= 0:
             raise ValueError(f"learning_rate must be positive, got {self.learning_rate}")
         if self.epochs <= 0:
             raise ValueError(f"epochs must be positive, got {self.epochs}")
-        if self.weight_decay < 0:
-            raise ValueError(f"weight_decay must be non-negative, got {self.weight_decay}")
-        if self.gradient_clip_norm <= 0:
-            raise ValueError(
-                f"gradient_clip_norm must be positive, got {self.gradient_clip_norm}"
-            )
-        if self.early_stopping_patience <= 0:
-            raise ValueError(
-                f"early_stopping_patience must be positive, got {self.early_stopping_patience}"
-            )
+        if self.grad_accum_steps <= 0:
+            raise ValueError(f"grad_accum_steps must be positive, got {self.grad_accum_steps}")

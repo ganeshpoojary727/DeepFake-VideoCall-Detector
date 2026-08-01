@@ -1,7 +1,8 @@
 """Audio processing constants and default hyper-parameters.
 
 Provides central constants for sampling rates, STFT window parameters,
-Mel spectrogram dimensions, supported audio extensions, and normalization defaults.
+Mel spectrogram dimensions, supported audio extensions, normalization defaults,
+and production audio dataset identifiers.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Tuple
 DEFAULT_SAMPLE_RATE: int = 16000
 DEFAULT_TARGET_DURATION_SECONDS: float = 5.0
 DEFAULT_TARGET_LENGTH_FRAMES: int = 100
+DEFAULT_NUM_SAMPLES: int = 64600  # Default ~4 sec @ 16kHz for AASIST
 
 # STFT and Spectrogram Parameter Defaults
 DEFAULT_N_FFT: int = 2048
@@ -37,3 +39,23 @@ SUPPORTED_AUDIO_EXTENSIONS: Tuple[str, ...] = (
 SILENCE_TOP_DB: int = 30
 PEAK_NORM_TARGET_DB: float = -3.0
 EPSILON: float = 1e-8
+
+# Production Paths
+AUDIO_DATASETS_DIR: str = "datasets/audio"
+AUDIO_CACHE_DIR: str = "datasets/audio/cache"
+AUDIO_LOGS_DIR: str = "logs/audio"
+AUDIO_MODELS_DIR: str = "trained_models/audio"
+
+# Production Dataset Identifiers
+DATASET_ASVSPOOF_2019_LA: str = "asvspoof2019_la"
+DATASET_ASVSPOOF_2021_LA: str = "asvspoof2021_la"
+DATASET_ASVSPOOF_2021_DF: str = "asvspoof2021_df"
+
+SUPPORTED_AUDIO_DATASETS: Tuple[str, ...] = (
+    DATASET_ASVSPOOF_2019_LA,
+    DATASET_ASVSPOOF_2021_LA,
+    DATASET_ASVSPOOF_2021_DF,
+)
+
+# Target Production Model
+PRODUCTION_AUDIO_MODEL: str = "aasist"

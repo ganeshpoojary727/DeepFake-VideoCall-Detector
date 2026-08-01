@@ -1,9 +1,4 @@
-"""
-Audio model architecture configuration definitions.
-
-Provides structured dataclasses for specifying model hyper-parameters, layer channels,
-feature embedding dimensions, and output classification targets.
-"""
+"""Audio model architecture configuration definitions."""
 
 from __future__ import annotations
 
@@ -15,26 +10,7 @@ from app.config.settings import settings
 
 @dataclass
 class AudioModelConfig:
-    """
-    Configuration parameters for audio deepfake classification models.
-
-    Parameters
-    ----------
-    model_name : str
-        Name/identifier of the model architecture (e.g. 'DeepFakeCNN', 'LightCNN').
-    num_classes : int
-        Number of output classification classes (default 2: Bonafide / Spoof).
-    in_channels : int
-        Number of input channels (default 1 for single-channel spectrograms).
-    feature_dim : int
-        Dimensionality of extracted feature representations.
-    dropout : float
-        Dropout probability for regularization.
-    conv_channels : List[int]
-        Channel dimensions for convolutional encoder layers.
-    confidence_threshold : float
-        Threshold for classifying a prediction as fake.
-    """
+    """Configuration parameters for audio deepfake classification models."""
 
     model_name: str = field(default_factory=lambda: settings.model.model_name)
     num_classes: int = field(default_factory=lambda: settings.model.num_classes)
@@ -51,14 +27,7 @@ class AudioModelConfig:
         self.validate()
 
     def validate(self) -> None:
-        """
-        Validate architecture configuration parameters.
-
-        Raises
-        ------
-        ValueError
-            If any structural model parameter is invalid.
-        """
+        """Validate architecture configuration parameters."""
         if self.num_classes <= 1:
             raise ValueError(f"num_classes must be > 1, got {self.num_classes}")
         if self.in_channels <= 0:
@@ -71,3 +40,7 @@ class AudioModelConfig:
             )
         if not self.conv_channels:
             raise ValueError("conv_channels cannot be empty")
+
+
+# Alias for backward compatibility
+ModelConfig = AudioModelConfig
