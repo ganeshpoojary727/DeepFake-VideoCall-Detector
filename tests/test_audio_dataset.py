@@ -1,12 +1,25 @@
-from app.ai.datasets.audio_dataset import AudioDataset
+"""Tests for the AudioDataset."""
 
-def main():
-    dataset = AudioDataset()
+from __future__ import annotations
 
-    feature, label = dataset[0]
+import pytest
+from pathlib import Path
 
-    print("Feature Shape :", feature.shape)
-    print("Label :", label)
+from app.audio.datasets.audio_dataset import AudioDataset
 
-if __name__ == "__main__":
-    main()
+
+class TestAudioDataset:
+    """Test suite for AudioDataset."""
+
+    def test_missing_protocol_raises(self) -> None:
+        """AudioDataset should raise FileNotFoundError for missing protocol."""
+        with pytest.raises(FileNotFoundError):
+            AudioDataset(
+                protocol_file="/nonexistent/protocol.txt",
+                audio_directory="/nonexistent/audio",
+            )
+
+    def test_constructor_requires_args(self) -> None:
+        """AudioDataset requires protocol_file and audio_directory."""
+        with pytest.raises(TypeError):
+            AudioDataset()  # type: ignore[call-arg]

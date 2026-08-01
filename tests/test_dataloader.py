@@ -1,20 +1,26 @@
-from app.ai.datasets.dataloader import create_dataloader
+"""Tests for the DataLoader factory functions."""
+
+from __future__ import annotations
+
+import torch
+
+from app.audio.datasets.dataloader import compute_class_weights
 
 
-def main():
+class TestDataLoaderFactory:
+    """Test suite for DataLoader utilities."""
 
-    loader = create_dataloader()
+    def test_class_weights_shape(self) -> None:
+        """Class weights should be a tensor of shape (2,)."""
+        weights = compute_class_weights()
+        assert weights.shape == (2,)
 
-    features, labels = next(iter(loader))
+    def test_class_weights_bonafide_higher(self) -> None:
+        """Bonafide weight should be higher (minority class)."""
+        weights = compute_class_weights(num_bonafide=2580, num_spoof=22800)
+        assert weights[0] > weights[1], "Bonafide should have higher weight"
 
-    print("--------------------------------")
-    print("Batch Loaded Successfully")
-    print("--------------------------------")
-    print("Feature Shape :", features.shape)
-    print("Labels Shape  :", labels.shape)
-    print("Feature Device:", features.device)
-    print("--------------------------------")
-
-
-if __name__ == "__main__":
-    main()
+    def test_class_weights_dtype(self) -> None:
+        """Class weights should be float32."""
+        weights = compute_class_weights()
+        assert weights.dtype == torch.float32
