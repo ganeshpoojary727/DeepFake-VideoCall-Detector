@@ -40,7 +40,8 @@ class AudioConfig:
 class TrainingConfig:
     """Training hyper-parameters."""
 
-    batch_size: int = int(os.getenv("BATCH_SIZE", "32"))
+    batch_size: int = int(os.getenv("BATCH_SIZE", "8"))
+    grad_accum_steps: int = int(os.getenv("GRADIENT_ACCUMULATION_STEPS", "4"))
     learning_rate: float = float(os.getenv("LEARNING_RATE", "0.001"))
     epochs: int = int(os.getenv("EPOCHS", "20"))
     num_workers: int = int(os.getenv("NUM_WORKERS", "4"))

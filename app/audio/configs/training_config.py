@@ -18,12 +18,13 @@ class AudioTrainingConfig:
     """Configuration parameters for audio AASIST model training pipeline."""
 
     model_name: str = PRODUCTION_AUDIO_MODEL
-    batch_size: int = 32
+    batch_size: int = 8
     learning_rate: float = 1e-4
     epochs: int = 50
     weight_decay: float = 1e-4
     use_amp: bool = True
-    grad_accum_steps: int = 1
+    grad_accum_steps: int = 4
+    use_checkpointing: bool = True
     gradient_clip_norm: float = 1.0
     early_stopping_patience: int = 10
     seed: int = 42

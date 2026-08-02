@@ -45,8 +45,7 @@ class AdjacencyMatrixBuilder(nn.Module):
         batch_size, num_nodes, _ = nodes.shape
 
         if self.metric == "cosine":
-            norm_nodes = F.normalize(nodes, p=2, dim=-1)
-            adj = torch.bmm(norm_nodes, norm_nodes.transpose(1, 2))
+            adj = torch.bmm(nodes, nodes.transpose(1, 2))
         elif self.metric == "dot":
             adj = torch.bmm(nodes, nodes.transpose(1, 2))
         elif self.metric == "euclidean":

@@ -38,15 +38,19 @@ class ProductionAudioTrainer:
         self.train_loader = train_loader
         self.val_loader = val_loader or kwargs.get("validation_loader")
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        passed_device = kwargs.get("device")
+        if passed_device:
+            self.device = torch.device(passed_device)
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
 
-        # Factories
-        self.optimizer = OptimizerFactory(self.config).create_optimizer(self.model)
-        self.scheduler = SchedulerFactory(self.config).create_scheduler(
+        # Factories or passed objects
+        self.optimizer = kwargs.get("optimizer") or OptimizerFactory(self.config).create_optimizer(self.model)
+        self.scheduler = kwargs.get("scheduler") or SchedulerFactory(self.config).create_scheduler(
             self.optimizer, steps_per_epoch=len(train_loader)
         )
-        self.criterion = LossFactory(self.config).create_loss()
+        self.criterion = kwargs.get("criterion") or LossFactory(self.config).create_loss()
 
         # Components
         self.validator = ValidationEngine(self.model, device=str(self.device))
@@ -58,8 +62,13 @@ class ProductionAudioTrainer:
         self.ema = EMAModel(self.model, decay=self.config.ema_decay) if self.config.use_ema else None
 
         # AMP
-        self.use_amp = self.config.use_amp and self.device.type == "cuda"
-        self.scaler = torch.amp.GradScaler("cuda") if self.use_amp else None
+        passed_use_amp = kwargs.get("use_amp")
+        if passed_use_amp is not None:
+            self.use_amp = bool(passed_use_amp) and self.device.type == "cuda"
+        else:
+            self.use_amp = self.config.use_amp and self.device.type == "cuda"
+
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp) if self.use_amp else None
 
         self.best_val_loss = float("inf")
         self.history: Dict[str, List[float]] = {"train_loss": [], "val_loss": [], "val_acc": [], "val_eer": []}
@@ -70,12 +79,14 @@ class ProductionAudioTrainer:
         running_loss = 0.0
         self.optimizer.zero_grad(set_to_none=True)
 
+        total_steps = len(self.train_loader)
         for step, batch in enumerate(self.train_loader):
             if isinstance(batch, dict):
                 x = batch["tensor"].to(self.device, non_blocking=True)
                 y = batch["label"].to(self.device, non_blocking=True)
             else:
-                x, y = batch[0].to(self.device), batch[1].to(self.device)
+                x = batch[0].to(self.device, non_blocking=True)
+                y = batch[1].to(self.device, non_blocking=True)
 
             if self.use_amp and self.scaler is not None:
                 with torch.amp.autocast("cuda"):
@@ -83,7 +94,7 @@ class ProductionAudioTrainer:
                     loss = self.criterion(logits, y) / self.config.grad_accum_steps
                 self.scaler.scale(loss).backward()
 
-                if (step + 1) % self.config.grad_accum_steps == 0:
+                if (step + 1) % self.config.grad_accum_steps == 0 or (step + 1) == total_steps:
                     if self.config.gradient_clip_norm > 0:
                         self.scaler.unscale_(self.optimizer)
                         nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_norm)
@@ -95,7 +106,7 @@ class ProductionAudioTrainer:
                 loss = self.criterion(logits, y) / self.config.grad_accum_steps
                 loss.backward()
 
-                if (step + 1) % self.config.grad_accum_steps == 0:
+                if (step + 1) % self.config.grad_accum_steps == 0 or (step + 1) == total_steps:
                     if self.config.gradient_clip_norm > 0:
                         nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_norm)
                     self.optimizer.step()
@@ -106,7 +117,9 @@ class ProductionAudioTrainer:
 
             running_loss += loss.item() * self.config.grad_accum_steps
 
-        epoch_loss = running_loss / len(self.train_loader)
+        epoch_loss = running_loss / total_steps
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
         return float(epoch_loss)
 
     def train(self) -> Dict[str, Any]:

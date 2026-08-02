@@ -10,6 +10,7 @@ from typing import List, Optional
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint as checkpoint
 
 from app.audio.models.layers.attention import SqueezeExcitation
 from app.audio.models.layers.conv import Conv1DBlock, SincConv
@@ -25,6 +26,7 @@ class RawNetEncoder(nn.Module):
         res_channels (List[int]): Channel dimensions for residual block stack.
         embedding_dim (int): Output latent embedding vector dimension.
         sample_rate (int): Sampling rate for SincConv initialization.
+        use_checkpointing (bool): Enable gradient/activation checkpointing during training.
     """
 
     def __init__(
@@ -34,8 +36,10 @@ class RawNetEncoder(nn.Module):
         res_channels: Optional[List[int]] = None,
         embedding_dim: int = 128,
         sample_rate: int = 16000,
+        use_checkpointing: bool = True,
     ) -> None:
         super().__init__()
+        self.use_checkpointing = use_checkpointing
         if res_channels is None:
             res_channels = [128, 128, 256, 256, 512, 512]
 
@@ -85,7 +89,11 @@ class RawNetEncoder(nn.Module):
         x = self.first_bn(x)
         x = self.first_act(x)
 
-        x = self.res_stack(x)
+        if self.training and self.use_checkpointing:
+            x = checkpoint.checkpoint(self.res_stack, x, use_reentrant=False)
+        else:
+            x = self.res_stack(x)
+
         x = self.out_bn(x)
         x = self.out_act(x)
 

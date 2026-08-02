@@ -30,9 +30,12 @@ def main() -> None:
     logger.info("Using device: %s", device)
 
     logger.info("─── Hyperparameters (AASIST) ───")
-    logger.info("  batch_size       = %d", settings.training.batch_size)
-    logger.info("  learning_rate    = %f", settings.training.learning_rate)
-    logger.info("  epochs           = %d", settings.training.epochs)
+    logger.info("  micro_batch_size  = %d", settings.training.batch_size)
+    logger.info("  grad_accum_steps  = %d", settings.training.grad_accum_steps)
+    logger.info("  effective_batch   = %d", settings.training.batch_size * settings.training.grad_accum_steps)
+    logger.info("  learning_rate     = %f", settings.training.learning_rate)
+    logger.info("  epochs            = %d", settings.training.epochs)
+    logger.info("  use_amp           = %s", settings.training.use_mixed_precision)
     logger.info("─────────────────────────────────")
 
     logger.info("Creating data loaders...")
@@ -59,10 +62,22 @@ def main() -> None:
         T_0=settings.training.scheduler_t0,
     )
 
+    from app.audio.configs.training_config import AudioTrainingConfig
+    config = AudioTrainingConfig(
+        batch_size=settings.training.batch_size,
+        grad_accum_steps=settings.training.grad_accum_steps,
+        learning_rate=settings.training.learning_rate,
+        epochs=settings.training.epochs,
+        use_amp=settings.training.use_mixed_precision,
+        gradient_clip_norm=settings.training.gradient_clip_norm,
+        weight_decay=settings.training.weight_decay,
+    )
+
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
-        validation_loader=validation_loader,
+        val_loader=validation_loader,
+        config=config,
         criterion=criterion,
         optimizer=optimizer,
         scheduler=scheduler,

@@ -150,9 +150,10 @@ class SincConv(nn.Module):
         self.freq_band = nn.Parameter(torch.from_numpy(np.diff(freqs)).float())
 
         n = (self.kernel_size - 1) / 2.0
-        self.window = 0.54 - 0.46 * torch.cos(
+        window = 0.54 - 0.46 * torch.cos(
             2.0 * math.pi * torch.arange(-n, n + 1) / self.kernel_size
         )
+        self.register_buffer("window", window)
         n_grid = 2.0 * math.pi * torch.arange(-n, n + 1) / sample_rate
         self.register_buffer("n_grid", n_grid)
 
@@ -175,7 +176,7 @@ class SincConv(nn.Module):
         # Compute ideal bandpass sinc filters
         sinc_high = torch.sin(f_high_mat * n_mat) / (n_mat / 2.0 + 1e-8)
         sinc_low = torch.sin(f_low_mat * n_mat) / (n_mat / 2.0 + 1e-8)
-        bandpass = (sinc_high - sinc_low) * self.window.to(x.device).unsqueeze(0)
+        bandpass = (sinc_high - sinc_low) * self.window.unsqueeze(0)
 
         # Normalize energy per filter
         bandpass = bandpass / (2.0 * (f_high_mat - f_low_mat) + 1e-8)

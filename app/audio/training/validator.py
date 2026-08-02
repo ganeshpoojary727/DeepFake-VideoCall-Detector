@@ -39,25 +39,36 @@ class ValidationEngine:
         total_time_ms = 0.0
         sample_count = 0
 
+        use_amp = self.device.type == "cuda"
+
         with torch.no_grad():
             for batch in val_loader:
                 if isinstance(batch, dict):
-                    x = batch["tensor"].to(self.device)
-                    y = batch["label"].to(self.device)
+                    x = batch["tensor"].to(self.device, non_blocking=True)
+                    y = batch["label"].to(self.device, non_blocking=True)
                 elif isinstance(batch, (tuple, list)):
-                    x, y = batch[0].to(self.device), batch[1].to(self.device)
+                    x = batch[0].to(self.device, non_blocking=True)
+                    y = batch[1].to(self.device, non_blocking=True)
                 else:
                     continue
 
                 t0 = time.perf_counter()
-                logits = self.model(x)
+                if use_amp:
+                    with torch.amp.autocast("cuda"):
+                        logits = self.model(x)
+                else:
+                    logits = self.model(x)
                 t1 = time.perf_counter()
 
                 total_time_ms += (t1 - t0) * 1000.0
                 sample_count += x.size(0)
 
                 if criterion is not None:
-                    loss = criterion(logits, y)
+                    if use_amp:
+                        with torch.amp.autocast("cuda"):
+                            loss = criterion(logits, y)
+                    else:
+                        loss = criterion(logits, y)
                     total_loss += loss.item() * x.size(0)
 
                 all_logits.append(logits.cpu())
