@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Type
+from typing import Any, Dict, Iterable, Optional, Type
 import torch
 import torch.nn as nn
 from torch.optim import SGD, Adam, AdamW, Optimizer
 
+from app.video.configs.training_config import VideoTrainingConfig
 from app.video.exceptions.video_exceptions import ConfigurationError
 from app.video.registry.video_registries import optimizer_registry
 
@@ -29,17 +30,7 @@ class OptimizerFactory:
         weight_decay: float = 1e-4,
         **kwargs: Any,
     ) -> Optimizer:
-        """Create PyTorch optimizer by name lookup.
-
-        Args:
-            name: Optimizer key name ("adam", "adamw", "sgd").
-            params: Model parameter iterator.
-            lr: Learning rate.
-            weight_decay: Weight decay penalty.
-
-        Returns:
-            Optimizer: Instantiated PyTorch optimizer.
-        """
+        """Create PyTorch optimizer by name lookup."""
         key = name.lower().strip()
         if key in cls._mapping:
             opt_cls = cls._mapping[key]
@@ -50,6 +41,21 @@ class OptimizerFactory:
                 raise ConfigurationError(f"Unsupported optimizer name '{name}'") from err
 
         return opt_cls(params, lr=lr, weight_decay=weight_decay, **kwargs)
+
+    @classmethod
+    def create_optimizer(
+        cls,
+        model: nn.Module,
+        config: Optional[VideoTrainingConfig] = None,
+    ) -> Optimizer:
+        """Create optimizer from model and VideoTrainingConfig object."""
+        cfg = config or VideoTrainingConfig()
+        return cls.create(
+            name=cfg.optimizer_name,
+            params=model.parameters(),
+            lr=cfg.learning_rate,
+            weight_decay=cfg.weight_decay,
+        )
 
 
 # Register defaults in global registry

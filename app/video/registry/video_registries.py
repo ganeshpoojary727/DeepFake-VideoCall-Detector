@@ -5,65 +5,38 @@ Exports pre-instantiated global registry objects matching Audio subsystem struct
 
 from __future__ import annotations
 
-from typing import Any, Callable, Type
-
 from app.video.registry.base_registry import BaseRegistry
+from app.video.registry.dataset_registry import DatasetRegistry, dataset_registry
+from app.video.registry.model_registry import ModelRegistry, model_registry
+from app.video.registry.optimizer_registry import OptimizerRegistry, optimizer_registry
+from app.video.registry.scheduler_registry import SchedulerRegistry, scheduler_registry
+from app.video.registry.loss_registry import LossRegistry, loss_registry
+from app.video.registry.augmentation_registry import AugmentationRegistry, augmentation_registry
 
 
-class DatasetRegistry(BaseRegistry[Any]):
-    """Registry for video dataset classes."""
-
-    def __init__(self) -> None:
-        super().__init__(name="DatasetRegistry")
-
-
-class ModelRegistry(BaseRegistry[Any]):
-    """Registry for video model architecture classes."""
-
-    def __init__(self) -> None:
-        super().__init__(name="ModelRegistry")
-
-
-class OptimizerRegistry(BaseRegistry[Any]):
-    """Registry for optimizer classes and factories."""
-
-    def __init__(self) -> None:
-        super().__init__(name="OptimizerRegistry")
-
-
-class SchedulerRegistry(BaseRegistry[Any]):
-    """Registry for learning rate scheduler classes and factories."""
-
-    def __init__(self) -> None:
-        super().__init__(name="SchedulerRegistry")
-
-
-class LossRegistry(BaseRegistry[Any]):
-    """Registry for loss function modules and factories."""
-
-    def __init__(self) -> None:
-        super().__init__(name="LossRegistry")
-
-
-class AugmentationRegistry(BaseRegistry[Any]):
-    """Registry for spatial and temporal video data augmentations."""
-
-    def __init__(self) -> None:
-        super().__init__(name="AugmentationRegistry")
-
-
-class PreprocessorRegistry(BaseRegistry[Any]):
+class PreprocessorRegistry(BaseRegistry):
     """Registry for video frame and face preprocessing modules."""
 
     def __init__(self) -> None:
         super().__init__(name="PreprocessorRegistry")
 
 
-# Global instances matching framework registry convention
-dataset_registry = DatasetRegistry()
-model_registry = ModelRegistry()
-optimizer_registry = OptimizerRegistry()
-scheduler_registry = SchedulerRegistry()
-loss_registry = LossRegistry()
-augmentation_registry = AugmentationRegistry()
 preprocessor_registry = PreprocessorRegistry()
+
+__all__ = [
+    "BaseRegistry",
+    "DatasetRegistry",
+    "ModelRegistry",
+    "OptimizerRegistry",
+    "SchedulerRegistry",
+    "LossRegistry",
+    "AugmentationRegistry",
+    "PreprocessorRegistry",
+    "dataset_registry",
+    "model_registry",
+    "optimizer_registry",
+    "scheduler_registry",
+    "loss_registry",
+    "augmentation_registry",
+    "preprocessor_registry",
+]

@@ -58,7 +58,8 @@ class ModelConfig:
 
     num_classes: int = 2
     confidence_threshold: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.7"))
-    model_name: str = "DeepFakeCNN"
+    model_name: str = "aasist"
+    video_model_name: str = "efficientnet_b4"
     model_version: str = "2.0"
 
 
@@ -148,27 +149,36 @@ class Settings:
 
     def __post_init__(self) -> None:
         """Derive dependent paths and create required directories."""
-        # Dataset paths
-        self.DATASET_DIR: Path = self.project_root / "app" / "ai" / "datasets"
+        # Dataset root paths
+        self.DATASET_DIR: Path = self.project_root / "datasets"
+        self.AUDIO_DATASET_DIR: Path = self.DATASET_DIR / "audio"
+        self.VIDEO_DATASET_DIR: Path = self.DATASET_DIR / "video"
 
-        # ASVspoof2019 LA dataset
-        la_dir = self.DATASET_DIR / "LA"
+        # Audio datasets (ASVspoof2019 & ASVspoof2021)
+        self.ASVSPOOF2019_DIR: Path = self.AUDIO_DATASET_DIR / "asvspoof2019"
+        self.ASVSPOOF2021_DIR: Path = self.AUDIO_DATASET_DIR / "asvspoof2021"
 
-        self.TRAIN_AUDIO_DIR: Path = la_dir / "ASVspoof2019_LA_train" / "flac"
-        self.VAL_AUDIO_DIR: Path = la_dir / "ASVspoof2019_LA_dev" / "flac"
-        self.TEST_AUDIO_DIR: Path = la_dir / "ASVspoof2019_LA_eval" / "flac"
+        self.TRAIN_AUDIO_DIR: Path = self.ASVSPOOF2019_DIR / "ASVspoof2019_LA_train" / "flac"
+        self.VAL_AUDIO_DIR: Path = self.ASVSPOOF2019_DIR / "ASVspoof2019_LA_dev" / "flac"
+        self.TEST_AUDIO_DIR: Path = self.ASVSPOOF2019_DIR / "ASVspoof2019_LA_eval" / "flac"
 
-        protocols = la_dir / "ASVspoof2019_LA_cm_protocols"
+        protocols = self.ASVSPOOF2019_DIR / "ASVspoof2019_LA_cm_protocols"
         self.TRAIN_PROTOCOL_FILE: Path = protocols / "ASVspoof2019.LA.cm.train.trn.txt"
         self.VAL_PROTOCOL_FILE: Path = protocols / "ASVspoof2019.LA.cm.dev.trl.txt"
         self.TEST_PROTOCOL_FILE: Path = protocols / "ASVspoof2019.LA.cm.eval.trl.txt"
+
+        # Video datasets
+        self.FACEFORENSICS_DIR: Path = self.VIDEO_DATASET_DIR / "faceforensics"
+        self.CELEB_DFV2_DIR: Path = self.VIDEO_DATASET_DIR / "celebdfv2"
+        self.VIDEO_CACHE_DIR: Path = self.VIDEO_DATASET_DIR / "cache"
+        self.VIDEO_PROCESSED_DIR: Path = self.VIDEO_DATASET_DIR / "processed"
 
         # Model directory
         self.MODEL_DIR: Path = self.project_root / "trained_models"
         self.MODEL_DIR.mkdir(parents=True, exist_ok=True)
         self.MODEL_SAVE_PATH: Path = self.MODEL_DIR / "best_model.pth"
 
-        # Log directory  — FIXES the missing LOG_DIR bug from the audit
+        # Log directory
         self.LOG_DIR: Path = self.project_root / "logs"
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -1,17 +1,16 @@
 """Model architecture registry module.
 
 Provides ModelRegistry for registering, looking up, and instantiating audio
-neural network models (DeepFakeCNN, LightCNN, AASIST, RawNet, ECAPA, etc.).
+neural network models (AASIST, RawNet, ECAPA, etc.).
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Type
-
 import torch.nn as nn
 
 from app.audio.exceptions.model_exceptions import ComponentNotFoundError
-from app.audio.models.legacy_cnn import DeepFakeCNN, LightCNN
+from app.audio.models.aasist import AASIST
 from app.audio.registry.base_registry import BaseRegistry
 
 
@@ -22,8 +21,8 @@ class ModelRegistry(BaseRegistry[nn.Module]):
 
     def __init__(self) -> None:
         super().__init__(name="ModelRegistry")
-        self.register("DeepFakeCNN", DeepFakeCNN, overwrite=True)
-        self.register("LightCNN", LightCNN, overwrite=True)
+        self.register("AASIST", AASIST, overwrite=True)
+        self.register("aasist", AASIST, overwrite=True)
 
     @classmethod
     def list_models(cls) -> List[str]:
@@ -51,10 +50,8 @@ class ModelRegistry(BaseRegistry[nn.Module]):
 
 
 # Initialize class-level defaults
-ModelRegistry._registry["DeepFakeCNN"] = DeepFakeCNN
-ModelRegistry._registry["deepfakecnn"] = DeepFakeCNN
-ModelRegistry._registry["LightCNN"] = LightCNN
-ModelRegistry._registry["lightcnn"] = LightCNN
+ModelRegistry._registry["AASIST"] = AASIST
+ModelRegistry._registry["aasist"] = AASIST
 
 # Default global instance for model architectures
 model_registry = ModelRegistry()

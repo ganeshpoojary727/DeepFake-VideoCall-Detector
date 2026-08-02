@@ -22,6 +22,10 @@ class JPEG(BaseVideoAugmentation):
         return torch.clamp(video + noise, 0.0, 1.0)
 
 
+# Augmentation alias
+JPEGCompression = JPEG
+
+
 class RandomCompression(BaseVideoAugmentation):
     """Applies random compression artifact levels across specified quality range."""
 

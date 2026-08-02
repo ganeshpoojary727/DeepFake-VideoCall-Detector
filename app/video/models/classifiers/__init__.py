@@ -1,15 +1,7 @@
-"""Video classifiers package."""
+"""Classifiers package exports."""
 
-from app.video.models.classifiers.base_classifier import (
-    BaseClassifier,
-    ClassifierRegistry,
-    LinearClassifier,
-    classifier_registry,
-)
+from app.video.models.classifiers.classifier_head import ModularClassifierHead
 
 __all__ = [
-    "BaseClassifier",
-    "ClassifierRegistry",
-    "LinearClassifier",
-    "classifier_registry",
+    "ModularClassifierHead",
 ]

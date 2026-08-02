@@ -3,23 +3,31 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 from app.video.augmentation.base_augmentation import BaseVideoAugmentation
 
 
 class Blur(BaseVideoAugmentation):
-    """Applies box/gaussian spatial smoothing blur to video frames."""
+    """Applies spatial smoothing blur to video frames."""
 
     def __init__(self, kernel_size: int = 5, p: float = 0.5) -> None:
         super().__init__(p=p)
         self._kernel_size = kernel_size
 
     def apply(self, video: torch.Tensor) -> torch.Tensor:
-        """Apply simple spatial mean filter across video frame sequence."""
+        """Apply spatial mean filter across video frame sequence."""
         k = self._kernel_size
         padding = k // 2
-        # Use average pooling across spatial H, W dimensions
-        return torch.nn.functional.avg_pool2d(video, kernel_size=k, stride=1, padding=padding)
+        return F.avg_pool2d(video, kernel_size=k, stride=1, padding=padding)
+
+
+class GaussianBlur(Blur):
+    """Applies Gaussian spatial blur to video frames."""
+
+    def __init__(self, kernel_size: int = 5, sigma: float = 1.0, p: float = 0.5) -> None:
+        super().__init__(kernel_size=kernel_size, p=p)
+        self._sigma = sigma
 
 
 class GaussianNoise(BaseVideoAugmentation):

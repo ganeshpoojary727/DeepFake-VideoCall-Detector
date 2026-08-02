@@ -1,4 +1,4 @@
-"""Temporal frame dropping and skipping video augmentations."""
+"""Temporal frame dropping, jittering, and skipping video augmentations."""
 
 from __future__ import annotations
 
@@ -20,6 +20,28 @@ class TemporalDrop(BaseVideoAugmentation):
         mask = (torch.rand(t) >= self._drop_prob).float().view(t, 1, 1, 1)
         mask = mask.to(video.device)
         return video * mask
+
+
+# Alias for FrameDropout
+FrameDropout = TemporalDrop
+
+
+class TemporalJitter(BaseVideoAugmentation):
+    """Applies small random temporal frame index perturbations."""
+
+    def __init__(self, max_shift: int = 2, p: float = 0.5) -> None:
+        super().__init__(p=p)
+        self._max_shift = max_shift
+
+    def apply(self, video: torch.Tensor) -> torch.Tensor:
+        """Randomly shift/permute adjacent frame indices temporally."""
+        t = video.shape[0]
+        if t <= 2:
+            return video
+        indices = torch.arange(t)
+        noise = torch.randint(-self._max_shift, self._max_shift + 1, (t,))
+        shifted = torch.clamp(indices + noise, 0, t - 1)
+        return video[shifted]
 
 
 class FrameSkip(BaseVideoAugmentation):

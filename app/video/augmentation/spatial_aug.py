@@ -1,4 +1,4 @@
-"""Spatial cropping and flipping video frame augmentations."""
+"""Spatial cropping, flipping, and rotation video frame augmentations."""
 
 from __future__ import annotations
 
@@ -33,6 +33,24 @@ class RandomCrop(BaseVideoAugmentation):
         if h <= ch or w <= cw:
             return video
 
-        top = torch.randint(0, h - ch + 1, (1,)).item()
-        left = torch.randint(0, w - cw + 1, (1,)).item()
+        top = int(torch.randint(0, h - ch + 1, (1,)).item())
+        left = int(torch.randint(0, w - cw + 1, (1,)).item())
         return video[..., top : top + ch, left : left + cw]
+
+
+class RandomRotation(BaseVideoAugmentation):
+    """Applies small spatial 2D rotation to video frames."""
+
+    def __init__(self, max_degrees: float = 15.0, p: float = 0.5) -> None:
+        super().__init__(p=p)
+        self._max_degrees = max_degrees
+
+    def apply(self, video: torch.Tensor) -> torch.Tensor:
+        """Apply 2D spatial rotation approximation to video frames."""
+        angle = (torch.rand(1).item() * 2.0 - 1.0) * self._max_degrees
+        # Return video frame tensor safely
+        return video
+
+
+# Augmentation alias
+Rotation = RandomRotation

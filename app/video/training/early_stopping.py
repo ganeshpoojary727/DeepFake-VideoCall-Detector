@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 
 class EarlyStopping:
     """Monitors validation loss to trigger early training termination on plateau."""
@@ -17,7 +19,7 @@ class EarlyStopping:
         self.mode = mode.lower().strip()
         self.counter = 0
         self.best_score: Optional[float] = None
-        self.should_stop = False
+        self.is_stopped = False
 
     def __call__(self, val_loss: float) -> bool:
         """Update monitor status with current metric score.
@@ -35,16 +37,21 @@ class EarlyStopping:
         elif score < self.best_score + self.min_delta:
             self.counter += 1
             if self.counter >= self.patience:
-                self.should_stop = True
+                self.is_stopped = True
         else:
             self.best_score = score
             self.counter = 0
-            self.should_stop = False
+            self.is_stopped = False
 
-        return self.should_stop
+        return self.is_stopped
+
+    @property
+    def should_stop(self) -> bool:
+        """Get current stopped state boolean flag."""
+        return self.is_stopped
 
     def reset(self) -> None:
         """Reset early stopping state."""
         self.counter = 0
         self.best_score = None
-        self.should_stop = False
+        self.is_stopped = False

@@ -13,5 +13,8 @@ class FeatureExtractorRegistry(BaseRegistry[BaseFeatureExtractor]):
         super().__init__(name="FeatureExtractorRegistry")
 
 
+# Class alias
+FeatureRegistry = FeatureExtractorRegistry
+
 # Global feature extractor registry instance
 feature_registry = FeatureExtractorRegistry()

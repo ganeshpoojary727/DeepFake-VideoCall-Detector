@@ -1,11 +1,12 @@
-"""Loss function factory module."""
+"""Loss function factory module supporting CrossEntropy, Focal, Weighted, and Label Smoothing loss."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, Type
+from typing import Any, Dict, Optional, Type
 import torch
 import torch.nn as nn
 
+from app.video.configs.training_config import VideoTrainingConfig
 from app.video.exceptions.video_exceptions import ConfigurationError
 from app.video.registry.video_registries import loss_registry
 
@@ -27,6 +28,18 @@ class FocalLoss(nn.Module):
         return focal_loss.mean()
 
 
+class WeightedCrossEntropyLoss(nn.Module):
+    """Weighted Cross Entropy Loss for imbalanced class distributions."""
+
+    def __init__(self, weights: Optional[torch.Tensor] = None) -> None:
+        super().__init__()
+        self.ce = nn.CrossEntropyLoss(weight=weights)
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Compute weighted cross entropy loss."""
+        return self.ce(inputs, targets)
+
+
 class LossFactory:
     """Factory for creating loss function criterion instances."""
 
@@ -34,18 +47,12 @@ class LossFactory:
         "cross_entropy": nn.CrossEntropyLoss,
         "bce": nn.BCEWithLogitsLoss,
         "focal": FocalLoss,
+        "weighted_ce": WeightedCrossEntropyLoss,
     }
 
     @classmethod
     def create(cls, name: str, **kwargs: Any) -> nn.Module:
-        """Create loss criterion by name.
-
-        Args:
-            name: Loss function key ("cross_entropy", "bce", "focal").
-
-        Returns:
-            nn.Module: Instantiated PyTorch loss criterion.
-        """
+        """Create loss criterion by name."""
         key = name.lower().strip()
         if key in cls._mapping:
             loss_cls = cls._mapping[key]
@@ -56,6 +63,19 @@ class LossFactory:
                 raise ConfigurationError(f"Unsupported loss name '{name}'") from err
 
         return loss_cls(**kwargs)
+
+    @classmethod
+    def create_loss(
+        cls,
+        config: Optional[VideoTrainingConfig] = None,
+        name: Optional[str] = None,
+        **kwargs: Any,
+    ) -> nn.Module:
+        """Create loss criterion from VideoTrainingConfig or name."""
+        loss_name = name or (config.loss_name if config else "cross_entropy")
+        if loss_name == "cross_entropy" and config and hasattr(config, "label_smoothing") and config.label_smoothing > 0:
+            kwargs["label_smoothing"] = config.label_smoothing
+        return cls.create(name=loss_name, **kwargs)
 
 
 # Register defaults in global registry

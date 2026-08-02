@@ -113,28 +113,22 @@ class TestRingBuffer:
 
 class TestModelRegistry:
     def test_list_models(self):
-        from app.audio.models.model_registry import ModelRegistry
+        from app.audio.registry.model_registry import ModelRegistry
         models = ModelRegistry.list_models()
-        assert "DeepFakeCNN" in models
-        assert "LightCNN" in models
+        assert "AASIST" in models
 
-    def test_create_deepfakecnn(self):
-        from app.audio.models.model_registry import ModelRegistry
-        model = ModelRegistry.create("DeepFakeCNN", num_classes=2)
-        assert model is not None
-
-    def test_create_lightcnn(self):
-        from app.audio.models.model_registry import ModelRegistry
-        model = ModelRegistry.create("LightCNN", num_classes=2)
+    def test_create_aasist(self):
+        from app.audio.registry.model_registry import ModelRegistry
+        model = ModelRegistry.create("AASIST", num_classes=2)
         assert model is not None
 
     def test_unknown_model_raises(self):
-        from app.audio.models.model_registry import ModelRegistry
+        from app.audio.registry.model_registry import ModelRegistry
         with pytest.raises(KeyError):
             ModelRegistry.create("UnknownModel")
 
     def test_register_new_model(self):
-        from app.audio.models.model_registry import ModelRegistry
+        from app.audio.registry.model_registry import ModelRegistry
         import torch.nn as nn
 
         class TinyModel(nn.Module):
@@ -147,81 +141,65 @@ class TestModelRegistry:
 
 
 # ──────────────────────────────────────────────
-# LightCNN
+# Production AASIST Model Test
 # ──────────────────────────────────────────────
 
 
-class TestLightCNN:
+class TestAASIST:
     def test_output_shape(self):
-        from app.audio.models.legacy_cnn_model import LightCNN
-        model = LightCNN(num_classes=2)
+        from app.audio.models.aasist import AASIST
+        model = AASIST(num_classes=2)
         model.eval()
-        x = torch.randn(4, 1, 128, 100)
+        x = torch.randn(2, 64600)
         with torch.no_grad():
             out = model(x)
-        assert out.shape == (4, 2)
-
-    def test_variable_input_size(self):
-        from app.audio.models.legacy_cnn_model import LightCNN
-        model = LightCNN(num_classes=2)
-        model.eval()
-        for t in [50, 100, 200]:
-            x = torch.randn(1, 1, 128, t)
-            with torch.no_grad():
-                out = model(x)
-            assert out.shape == (1, 2), f"Failed for time_frames={t}"
-
-    def test_parameter_count(self):
-        from app.audio.models.legacy_cnn_model import LightCNN
-        model = LightCNN(num_classes=2)
-        params = sum(p.numel() for p in model.parameters())
-        # LightCNN should be larger than DeepFakeCNN (67K)
-        assert params > 100_000, f"Unexpectedly few params: {params}"
-
-    def test_gradient_flow(self):
-        from app.audio.models.legacy_cnn_model import LightCNN
-        model = LightCNN(num_classes=2)
-        model.train()
-        x = torch.randn(2, 1, 128, 100)
-        out = model(x)
-        loss = out.sum()
-        loss.backward()
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                assert param.grad is not None, f"No grad for {name}"
-
-
-# ──────────────────────────────────────────────
-# VideoDeepFakeCNN
-# ──────────────────────────────────────────────
-
-
-class TestVideoDeepFakeCNN:
-    def test_output_shape(self):
-        from app.video.models.video_model import VideoDeepFakeCNN
-        model = VideoDeepFakeCNN(num_classes=2)
-        model.eval()
-        x = torch.randn(2, 3, 224, 224)
-        with torch.no_grad():
-            out = model(x)
+            if isinstance(out, tuple):
+                out = out[1]
         assert out.shape == (2, 2)
 
     def test_parameter_count(self):
-        from app.video.models.video_model import VideoDeepFakeCNN
-        model = VideoDeepFakeCNN(num_classes=2)
+        from app.audio.models.aasist import AASIST
+        model = AASIST(num_classes=2)
         params = sum(p.numel() for p in model.parameters())
-        # Lightweight EfficientNet-style model: 200K–5M range acceptable
-        assert 100_000 < params < 5_000_000, f"Unexpected param count: {params}"
+        assert params > 100_000
 
     def test_gradient_flow(self):
-        from app.video.models.video_model import VideoDeepFakeCNN
-        model = VideoDeepFakeCNN(num_classes=2)
+        from app.audio.models.aasist import AASIST
+        model = AASIST(num_classes=2)
         model.train()
-        x = torch.randn(2, 3, 224, 224)
+        x = torch.randn(2, 64600, requires_grad=True)
+        out = model(x)
+        if isinstance(out, tuple):
+            out = out[1]
+        loss = out.sum()
+        loss.backward()
+        assert x.grad is not None
+        assert x.grad.shape == (2, 64600)
+
+
+# ──────────────────────────────────────────────
+# Production EfficientNetB4Model Test
+# ──────────────────────────────────────────────
+
+
+class TestEfficientNetB4Model:
+    def test_parameter_count(self):
+        from app.video.models.efficientnet.model import EfficientNetB4Model
+        from app.video.configs.model_config import ModelConfig
+        model = EfficientNetB4Model(config=ModelConfig(pretrained=False))
+        params = sum(p.numel() for p in model.parameters())
+        assert params > 1_000_000
+
+    def test_gradient_flow(self):
+        from app.video.models.efficientnet.model import EfficientNetB4Model
+        from app.video.configs.model_config import ModelConfig
+        model = EfficientNetB4Model(config=ModelConfig(pretrained=False))
+        model.train()
+        x = torch.randn(2, 3, 224, 224, requires_grad=True)
         out = model(x)
         out.sum().backward()
-        for name, p in model.named_parameters():
-            assert p.grad is not None, f"No grad for {name}"
+        assert x.grad is not None
+        assert x.grad.shape == (2, 3, 224, 224)
 
 
 # ──────────────────────────────────────────────

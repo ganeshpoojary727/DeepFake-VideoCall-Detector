@@ -16,5 +16,8 @@ class VideoModelRegistry(BaseRegistry[nn.Module]):
         super().__init__(name="VideoModelRegistry")
 
 
+# Class alias
+ModelRegistry = VideoModelRegistry
+
 # Global model registry instance
 model_registry = VideoModelRegistry()

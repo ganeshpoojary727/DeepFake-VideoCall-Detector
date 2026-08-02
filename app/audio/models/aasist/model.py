@@ -16,7 +16,6 @@ from app.audio.models.aasist.graph.graph_builder import GraphBuilder
 from app.audio.models.aasist.modules.backend import AASISTBackEnd
 from app.audio.models.aasist.modules.frontend import AASISTFrontEnd
 from app.audio.models.aasist.modules.fusion import FeatureFusion
-from app.audio.registry.model_registry import model_registry
 
 
 class AASIST(BaseAudioModel):
@@ -94,7 +93,3 @@ class AASIST(BaseAudioModel):
             int: Total trainable parameters count.
         """
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
-
-
-# Register AASIST model architecture in model_registry
-model_registry.register("aasist", AASIST, overwrite=True)

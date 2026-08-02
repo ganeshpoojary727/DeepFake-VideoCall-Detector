@@ -31,11 +31,12 @@ class ProductionAudioTrainer:
         train_loader: DataLoader,
         val_loader: Optional[DataLoader] = None,
         config: Optional[AudioTrainingConfig] = None,
+        **kwargs: Any,
     ) -> None:
         self.config = config or AudioTrainingConfig()
         self.model = model
         self.train_loader = train_loader
-        self.val_loader = val_loader
+        self.val_loader = val_loader or kwargs.get("validation_loader")
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
@@ -156,6 +157,12 @@ class ProductionAudioTrainer:
 
         self.tb_logger.close()
         return self.history
+
+    def fit(self, epochs: Optional[int] = None) -> Dict[str, Any]:
+        """Alias method for training loop execution."""
+        if epochs is not None:
+            self.config.epochs = epochs
+        return self.train()
 
 
 # Backward compatibility alias

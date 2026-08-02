@@ -24,6 +24,8 @@ from app.video.models.classifiers.base_classifier import (
     LinearClassifier,
     classifier_registry,
 )
+from app.video.models.efficientnet.backbone import EfficientNetB4Backbone
+from app.video.models.efficientnet.model import EfficientNetB4Model
 from app.video.models.model_registry import model_registry
 
 
@@ -45,20 +47,16 @@ class ModularVideoModel(BaseVideoModel):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass [B, T, C, H, W] -> [B, num_classes]."""
         if x.dim() == 4:
-            x = x.unsqueeze(0)  # [1, T, C, H, W]
+            x = x.unsqueeze(0)
 
         b, t, c, h, w = x.shape
         frames_flat = x.view(b * t, c, h, w)
 
-        # Extract spatial features for each frame
-        spatial_feats = self.backbone(frames_flat)  # [B*T, feature_dim]
-        spatial_feats = spatial_feats.view(b, t, -1)  # [B, T, feature_dim]
+        spatial_feats = self.backbone(frames_flat)
+        spatial_feats = spatial_feats.view(b, t, -1)
 
-        # Aggregate across temporal dimension
-        temp_feats = self.attention(spatial_feats)  # [B, out_dim]
-
-        # Classify
-        logits = self.classifier(temp_feats)  # [B, num_classes]
+        temp_feats = self.attention(spatial_feats)
+        logits = self.classifier(temp_feats)
         return logits
 
 
@@ -67,25 +65,23 @@ class VideoFactory:
 
     @classmethod
     def create_model(cls, config: Optional[ModelConfig] = None) -> BaseVideoModel:
-        """Create video model from ModelConfig.
-
-        Args:
-            config: Model configuration dataclass.
-
-        Returns:
-            BaseVideoModel: Constructed PyTorch model.
-        """
+        """Create video model from ModelConfig."""
         cfg = config or ModelConfig()
         cfg.validate()
 
-        # Retrieve or instantiate backbone
+        b_name = cfg.backbone_name.lower().strip()
+        m_name = cfg.model_name.lower().strip()
+
+        if b_name == "efficientnet_b4" or m_name == "efficientnet_b4":
+            return EfficientNetB4Model(config=cfg)
+
+        # Fallback to modular assembly
         try:
             backbone_cls = backbone_registry.get(cfg.backbone_name)
             backbone = backbone_cls(in_channels=cfg.in_channels, feature_dim=cfg.feature_dim)
         except Exception:
             backbone = DummyBackbone(in_channels=cfg.in_channels, feature_dim=cfg.feature_dim)
 
-        # Retrieve or instantiate attention
         att_name = cfg.attention_name or "dummy_attention"
         try:
             attention_cls = attention_registry.get(att_name)
@@ -93,21 +89,24 @@ class VideoFactory:
         except Exception:
             attention = DummyTemporalAttention(feature_dim=cfg.feature_dim, out_dim=512)
 
-        # Retrieve or instantiate classifier
         try:
             classifier_cls = classifier_registry.get(cfg.classifier_name)
             classifier = classifier_cls(in_features=512, num_classes=cfg.num_classes, dropout=cfg.dropout)
         except Exception:
             classifier = LinearClassifier(in_features=512, num_classes=cfg.num_classes, dropout=cfg.dropout)
 
-        model = ModularVideoModel(
+        return ModularVideoModel(
             backbone=backbone,
             attention=attention,
             classifier=classifier,
             config=cfg,
         )
 
-        return model
 
-
+# Register models into global registry
 model_registry.register("modular_video_model", ModularVideoModel, overwrite=True)
+model_registry.register("efficientnet_b4", EfficientNetB4Model, overwrite=True)
+model_registry.register("efficientnet_b0", EfficientNetB4Model, overwrite=True)
+model_registry.register("efficientnet_b2", EfficientNetB4Model, overwrite=True)
+model_registry.register("efficientnet_b5", EfficientNetB4Model, overwrite=True)
+backbone_registry.register("efficientnet_b4", EfficientNetB4Backbone, overwrite=True)
