@@ -31,7 +31,7 @@ class AudioDataConfig:
     splits: List[str] = field(default_factory=lambda: ["train", "dev", "eval"])
     batch_size: int = 32
     num_workers: int = 4
-    prefetch_factor: int = 2
+    prefetch_factor: int = 4
     persistent_workers: bool = True
     pin_memory: bool = True
     seed: int = 42

@@ -25,6 +25,11 @@ def main() -> None:
     """Entry point for training production AASIST audio model."""
     set_seed(settings.training.seed)
     torch.backends.cudnn.benchmark = True
+    if torch.cuda.is_available():
+        if hasattr(torch, "set_float32_matmul_precision"):
+            torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     device = settings.DEVICE
     logger.info("Using device: %s", device)

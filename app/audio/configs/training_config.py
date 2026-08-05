@@ -18,12 +18,12 @@ class AudioTrainingConfig:
     """Configuration parameters for audio AASIST model training pipeline."""
 
     model_name: str = PRODUCTION_AUDIO_MODEL
-    batch_size: int = 8
+    batch_size: int = 32
     learning_rate: float = 1e-4
     epochs: int = 50
     weight_decay: float = 1e-4
     use_amp: bool = True
-    grad_accum_steps: int = 4
+    grad_accum_steps: int = 1
     use_checkpointing: bool = True
     gradient_clip_norm: float = 1.0
     early_stopping_patience: int = 10
@@ -39,7 +39,9 @@ class AudioTrainingConfig:
     checkpoint_dir: Path = field(default_factory=lambda: Path(AUDIO_MODELS_DIR))
     log_dir: Path = field(default_factory=lambda: Path(AUDIO_LOGS_DIR))
     tensorboard_dir: Path = field(default_factory=lambda: Path(AUDIO_LOGS_DIR) / "tensorboard")
-    log_interval: int = 10
+    log_interval: int = 50
+    skip_bad_batches: bool = True
+    gpu_poll_interval_sec: float = 3.0
 
     def __post_init__(self) -> None:
         """Resolve paths and validate parameters."""

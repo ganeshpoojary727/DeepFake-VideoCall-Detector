@@ -90,7 +90,8 @@ class RawNetEncoder(nn.Module):
         x = self.first_act(x)
 
         if self.training and self.use_checkpointing:
-            x = checkpoint.checkpoint(self.res_stack, x, use_reentrant=False)
+            for layer in self.res_stack:
+                x = checkpoint.checkpoint(layer, x, use_reentrant=False)
         else:
             x = self.res_stack(x)
 

@@ -33,6 +33,7 @@ class ValidationEngine:
             Dict[str, Any]: Comprehensive metrics dictionary.
         """
         self.model.eval()
+        val_start_time = time.perf_counter()
         total_loss = 0.0
         all_logits = []
         all_labels = []
@@ -84,5 +85,7 @@ class ValidationEngine:
         else:
             metrics = {"accuracy": 0.0, "f1": 0.0, "eer": 0.0}
 
+        val_time_sec = time.perf_counter() - val_start_time
         metrics["val_loss"] = float(val_loss)
+        metrics["val_time_sec"] = float(val_time_sec)
         return metrics
