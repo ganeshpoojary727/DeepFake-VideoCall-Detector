@@ -45,7 +45,9 @@ class TestAASISTModules:
         frontend = AASISTFrontEnd(in_channels=1, sinc_channels=16, embedding_dim=64)
         audio = torch.randn(2, 1, 8000)
         feat = frontend(audio)
-        assert feat.shape == (2, 64)
+        assert feat.shape[0] == 2
+        assert feat.shape[1] == 64
+        assert feat.ndim == 3
 
     def test_backend_shape(self):
         backend = AASISTBackEnd(node_dim=64, num_classes=2)

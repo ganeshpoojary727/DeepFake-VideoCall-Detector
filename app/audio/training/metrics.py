@@ -10,6 +10,11 @@ import torch
 from app.audio.training.eer_metrics import compute_biometric_metrics
 
 
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
 class AudioMetricsCalculator:
     """Calculates accuracy, precision, recall, F1, ROC AUC, confusion matrix, EER, HTER, APCER, BPCER, latency, and GPU usage."""
 
@@ -29,8 +34,44 @@ class AudioMetricsCalculator:
         Returns:
             Dict[str, Any]: Comprehensive metrics dictionary.
         """
+        gpu_memory_mb = 0.0
+        if torch.cuda.is_available():
+            gpu_memory_mb = float(torch.cuda.max_memory_allocated() / (1024 * 1024))
+
         if y_pred_logits.numel() == 0:
-            return {"accuracy": 0.0, "f1": 0.0, "eer": 0.0}
+            return {
+                "accuracy": None,
+                "precision": None,
+                "recall": None,
+                "f1": None,
+                "confusion_matrix": None,
+                "latency_ms": float(latency_ms),
+                "gpu_memory_mb": float(gpu_memory_mb),
+                "eer": None,
+                "hter": None,
+                "apcer": None,
+                "bpcer": None,
+                "eer_threshold": None,
+                "is_valid": False,
+            }
+
+        if torch.isnan(y_pred_logits).any() or torch.isinf(y_pred_logits).any():
+            logger.warning("Non-finite logits (NaN/Inf) detected in AudioMetricsCalculator. Reporting INVALID (None).")
+            return {
+                "accuracy": None,
+                "precision": None,
+                "recall": None,
+                "f1": None,
+                "confusion_matrix": None,
+                "latency_ms": float(latency_ms),
+                "gpu_memory_mb": float(gpu_memory_mb),
+                "eer": None,
+                "hter": None,
+                "apcer": None,
+                "bpcer": None,
+                "eer_threshold": None,
+                "is_valid": False,
+            }
 
         probs = torch.softmax(y_pred_logits, dim=-1)
         preds = torch.argmax(probs, dim=-1)
@@ -52,11 +93,6 @@ class AudioMetricsCalculator:
         # Biometric error rates (EER, HTER, APCER, BPCER)
         bio = compute_biometric_metrics(probs, y_true)
 
-        # GPU Utilization / Memory (if CUDA available)
-        gpu_memory_mb = 0.0
-        if torch.cuda.is_available():
-            gpu_memory_mb = float(torch.cuda.max_memory_allocated() / (1024 * 1024))
-
         return {
             "accuracy": float(accuracy),
             "precision": float(precision),
@@ -66,4 +102,5 @@ class AudioMetricsCalculator:
             "latency_ms": float(latency_ms),
             "gpu_memory_mb": float(gpu_memory_mb),
             **bio,
+            "is_valid": bio.get("is_valid", True),
         }

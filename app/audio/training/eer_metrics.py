@@ -7,7 +7,12 @@ import numpy as np
 import torch
 
 
-def compute_eer(bonafide_scores: np.ndarray, spoof_scores: np.ndarray) -> Tuple[float, float]:
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def compute_eer(bonafide_scores: np.ndarray, spoof_scores: np.ndarray) -> Tuple[Optional[float], Optional[float]]:
     """Compute Equal Error Rate (EER) and decision threshold.
 
     Args:
@@ -15,10 +20,14 @@ def compute_eer(bonafide_scores: np.ndarray, spoof_scores: np.ndarray) -> Tuple[
         spoof_scores: Scores for spoof samples.
 
     Returns:
-        Tuple[float, float]: (eer, threshold).
+        Tuple[Optional[float], Optional[float]]: (eer, threshold) or (None, None) if invalid.
     """
     if len(bonafide_scores) == 0 or len(spoof_scores) == 0:
-        return 0.0, 0.5
+        return None, None
+
+    if np.isnan(bonafide_scores).any() or np.isnan(spoof_scores).any() or np.isinf(bonafide_scores).any() or np.isinf(spoof_scores).any():
+        logger.warning("Non-finite scores detected in compute_eer. Returning INVALID metrics (None).")
+        return None, None
 
     all_scores = np.concatenate([bonafide_scores, spoof_scores])
     thresholds = np.sort(all_scores)
@@ -28,7 +37,10 @@ def compute_eer(bonafide_scores: np.ndarray, spoof_scores: np.ndarray) -> Tuple[
     far = np.array([np.mean(spoof_scores >= t) for t in thresholds])
 
     # Find threshold where FRR == FAR
-    idx = np.nanargmin(np.abs(frr - far))
+    diffs = np.abs(frr - far)
+    if np.isnan(diffs).any():
+        return None, None
+    idx = np.nanargmin(diffs)
     eer = (frr[idx] + far[idx]) / 2.0
     return float(eer), float(thresholds[idx])
 
@@ -37,7 +49,7 @@ def compute_biometric_metrics(
     y_pred_probs: torch.Tensor | np.ndarray,
     y_true: torch.Tensor | np.ndarray,
     threshold: float = 0.5,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """Compute biometric error rates APCER, BPCER, HTER, and EER.
 
     Args:
@@ -46,7 +58,7 @@ def compute_biometric_metrics(
         threshold: Operating decision threshold.
 
     Returns:
-        Dict[str, float]: Biometric metrics dictionary.
+        Dict[str, Any]: Biometric metrics dictionary.
     """
     if isinstance(y_pred_probs, torch.Tensor):
         probs = y_pred_probs.detach().cpu().numpy()
@@ -57,6 +69,17 @@ def compute_biometric_metrics(
         labels = y_true.detach().cpu().numpy()
     else:
         labels = np.array(y_true)
+
+    if np.isnan(probs).any() or np.isinf(probs).any():
+        logger.warning("Non-finite probabilities detected in compute_biometric_metrics. Reporting INVALID.")
+        return {
+            "eer": None,
+            "hter": None,
+            "apcer": None,
+            "bpcer": None,
+            "eer_threshold": None,
+            "is_valid": False,
+        }
 
     if probs.ndim == 2 and probs.shape[1] == 2:
         spoof_prob = probs[:, 1]
@@ -78,9 +101,10 @@ def compute_biometric_metrics(
     eer, eer_threshold = compute_eer(bonafide_scores, spoof_scores)
 
     return {
-        "eer": float(eer),
+        "eer": float(eer) if eer is not None else None,
         "hter": float(hter),
         "apcer": float(apcer),
         "bpcer": float(bpcer),
-        "eer_threshold": float(eer_threshold),
+        "eer_threshold": float(eer_threshold) if eer_threshold is not None else None,
+        "is_valid": True if eer is not None else False,
     }

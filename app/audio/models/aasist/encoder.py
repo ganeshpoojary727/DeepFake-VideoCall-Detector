@@ -27,6 +27,7 @@ class RawNetEncoder(nn.Module):
         embedding_dim (int): Output latent embedding vector dimension.
         sample_rate (int): Sampling rate for SincConv initialization.
         use_checkpointing (bool): Enable gradient/activation checkpointing during training.
+        return_sequence (bool): If True, returns 3D feature map (batch, embedding_dim, length) for graph building.
     """
 
     def __init__(
@@ -37,9 +38,11 @@ class RawNetEncoder(nn.Module):
         embedding_dim: int = 128,
         sample_rate: int = 16000,
         use_checkpointing: bool = True,
+        return_sequence: bool = False,
     ) -> None:
         super().__init__()
         self.use_checkpointing = use_checkpointing
+        self.return_sequence = return_sequence
         if res_channels is None:
             res_channels = [128, 128, 256, 256, 512, 512]
 
@@ -50,18 +53,18 @@ class RawNetEncoder(nn.Module):
         )
         self.first_bn = nn.BatchNorm1d(sinc_channels)
         self.first_act = nn.LeakyReLU(0.2, inplace=True)
+        self.first_pool = nn.MaxPool1d(4)
 
-        # Build stack of 1D residual blocks with SE attention
+        # Build stack of 1D residual blocks with SE attention and downsampling
         res_layers: List[nn.Module] = []
         curr_channels = sinc_channels
 
         for i, out_c in enumerate(res_channels):
-            downsample = i % 2 == 1  # Downsample every 2nd block
             res_layers.append(
                 ResidualBlock1D(
                     in_channels=curr_channels,
                     out_channels=out_c,
-                    downsample=downsample,
+                    downsample=True,
                 )
             )
             res_layers.append(SqueezeExcitation(channels=out_c, reduction=8))
@@ -72,15 +75,17 @@ class RawNetEncoder(nn.Module):
         self.out_act = nn.LeakyReLU(0.2, inplace=True)
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.fc_embedding = nn.Linear(curr_channels, embedding_dim)
+        self.out_proj = nn.Conv1d(curr_channels, embedding_dim, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Extract latent audio feature embeddings.
 
         Args:
-            x (torch.Tensor): Raw waveform or spectrogram tensor of shape (batch, 1, length).
+            x (torch.Tensor): Raw waveform or spectrogram tensor of shape (batch, 1, length) or (batch, length).
 
         Returns:
-            torch.Tensor: Latent audio embedding vectors of shape (batch, embedding_dim).
+            torch.Tensor: Latent audio feature tensor of shape (batch, embedding_dim, num_nodes) if return_sequence is True,
+                          else (batch, embedding_dim).
         """
         if x.ndim == 2:
             x = x.unsqueeze(1)
@@ -88,6 +93,7 @@ class RawNetEncoder(nn.Module):
         x = self.sinc_conv(x)
         x = self.first_bn(x)
         x = self.first_act(x)
+        x = self.first_pool(x)
 
         if self.training and self.use_checkpointing:
             for layer in self.res_stack:
@@ -98,7 +104,8 @@ class RawNetEncoder(nn.Module):
         x = self.out_bn(x)
         x = self.out_act(x)
 
-        # Global pooling and embedding projection
-        x = self.pool(x).squeeze(-1)
-        embedding = self.fc_embedding(x)
-        return embedding
+        if self.return_sequence:
+            return self.out_proj(x)
+        else:
+            x = self.pool(x).squeeze(-1)
+            return self.fc_embedding(x)

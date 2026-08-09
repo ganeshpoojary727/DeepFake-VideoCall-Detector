@@ -13,6 +13,7 @@ Design decisions
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
@@ -42,9 +43,11 @@ class TrainingConfig:
 
     batch_size: int = int(os.getenv("BATCH_SIZE", "32"))
     grad_accum_steps: int = int(os.getenv("GRADIENT_ACCUMULATION_STEPS", "1"))
-    learning_rate: float = float(os.getenv("LEARNING_RATE", "0.001"))
+    learning_rate: float = float(os.getenv("LEARNING_RATE", "0.0001"))
     epochs: int = int(os.getenv("EPOCHS", "20"))
-    num_workers: int = int(os.getenv("NUM_WORKERS", "4"))
+    num_workers: int = int(
+        os.getenv("NUM_WORKERS", "0" if sys.platform == "win32" else "4")
+    )
     early_stopping_patience: int = int(os.getenv("EARLY_STOPPING_PATIENCE", "5"))
     gradient_clip_norm: float = float(os.getenv("GRADIENT_CLIP_NORM", "1.0"))
     weight_decay: float = float(os.getenv("WEIGHT_DECAY", "1e-4"))

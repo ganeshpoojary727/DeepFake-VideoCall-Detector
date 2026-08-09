@@ -83,3 +83,21 @@ class TemporalEncoder(BaseTemporalAttention):
 
         clip_emb = self.pooling(x)
         return self.out_proj(clip_emb)
+
+    def get_attention_weights(self, sequence_features: torch.Tensor) -> torch.Tensor:
+        """Extract attention weights over sequence frames.
+
+        Args:
+            sequence_features: Input frame embeddings tensor of shape (B, T, 1792).
+
+        Returns:
+            torch.Tensor: Attention weights of shape (B, T, 1) summing to 1.0 over T.
+        """
+        x = self.pos_encoder(sequence_features)
+        x = self.pooling.prepend_cls_token(x)
+
+        for block in self.blocks:
+            x = block(x)
+
+        return self.pooling.get_attention_weights(x)
+

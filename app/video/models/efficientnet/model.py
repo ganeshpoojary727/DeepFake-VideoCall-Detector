@@ -91,6 +91,21 @@ class EfficientNetB4Model(BaseVideoModel):
             frame_feats = frame_feats.unsqueeze(1)
         return self.temporal_encoder(frame_feats)
 
+    def get_attention_weights(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract temporal attention weights for video frames.
+
+        Args:
+            x: Input tensor of shape (B, C, H, W) or (B, T, C, H, W).
+
+        Returns:
+            torch.Tensor: Attention weights of shape (B, T, 1) summing to 1.0 over T.
+        """
+        if x.ndim == 4:
+            x = x.unsqueeze(1)
+        frame_feats = self.extract_features(x)
+        return self.temporal_encoder.get_attention_weights(frame_feats)
+
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass.
 

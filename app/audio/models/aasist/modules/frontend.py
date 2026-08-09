@@ -40,6 +40,7 @@ class AASISTFrontEnd(nn.Module):
             res_channels=res_channels,
             embedding_dim=embedding_dim,
             sample_rate=sample_rate,
+            return_sequence=True,
         )
         self.layer_norm = nn.LayerNorm(embedding_dim)
 
@@ -50,8 +51,11 @@ class AASISTFrontEnd(nn.Module):
             audio (torch.Tensor): Raw waveform tensor of shape (batch, 1, length) or (batch, length).
 
         Returns:
-            torch.Tensor: Normalised feature embedding of shape (batch, embedding_dim).
+            torch.Tensor: Normalised feature map of shape (batch, embedding_dim, num_nodes).
         """
         features = self.encoder(audio)
-        normalized = self.layer_norm(features)
-        return normalized
+        if features.ndim == 3:
+            features = features.transpose(1, 2)
+            normalized = self.layer_norm(features)
+            return normalized.transpose(1, 2)
+        return self.layer_norm(features)

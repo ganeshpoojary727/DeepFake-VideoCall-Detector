@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -126,15 +127,6 @@ class ProductionAudioTrainer:
         )
         self.criterion = kwargs.get("criterion") or LossFactory(self.config).create_loss()
 
-        # Components
-        self.validator = ValidationEngine(self.model, device=str(self.device))
-        self.checkpoint_manager = CheckpointManager(
-            checkpoint_dir=self.config.checkpoint_dir,
-            max_to_keep=3,
-        )
-        self.tb_logger = TensorBoardLogger(log_dir=self.config.tensorboard_dir)
-        self.ema = EMAModel(self.model, decay=self.config.ema_decay) if self.config.use_ema else None
-
         # AMP
         passed_use_amp = kwargs.get("use_amp")
         if passed_use_amp is not None:
@@ -143,6 +135,15 @@ class ProductionAudioTrainer:
             self.use_amp = self.config.use_amp and self.device.type == "cuda"
 
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp) if self.use_amp else None
+
+        # Components
+        self.validator = ValidationEngine(self.model, device=str(self.device), use_amp=self.use_amp)
+        self.checkpoint_manager = CheckpointManager(
+            checkpoint_dir=self.config.checkpoint_dir,
+            max_to_keep=3,
+        )
+        self.tb_logger = TensorBoardLogger(log_dir=self.config.tensorboard_dir)
+        self.ema = EMAModel(self.model, decay=self.config.ema_decay) if self.config.use_ema else None
 
         self.best_val_loss = float("inf")
         self.history: Dict[str, List[float]] = {"train_loss": [], "val_loss": [], "val_acc": [], "val_eer": []}
@@ -198,6 +199,148 @@ class ProductionAudioTrainer:
         try:
             for step in range(total_steps):
                 t_batch_start = time.perf_counter()
+
+                # ── First Batch Diagnostic Mode (Epoch 1, Step 0) ──
+                if epoch == 1 and step == 0:
+                    t0_data = time.perf_counter()
+                    batch = next(train_iter)
+                    t1_data = time.perf_counter()
+                    t_data_load = t1_data - t0_data
+
+                    x_cpu = batch["tensor"] if isinstance(batch, dict) else batch[0]
+                    y_cpu = batch["label"] if isinstance(batch, dict) else batch[1]
+
+                    tensor_shape = list(x_cpu.shape)
+                    tensor_dtype = str(x_cpu.dtype)
+                    tensor_device_before = str(x_cpu.device)
+
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+                        gpu_alloc_before = torch.cuda.memory_allocated() / (1024**3)
+
+                    t0_gpu = time.perf_counter()
+                    x = x_cpu.to(self.device, non_blocking=True)
+                    y = y_cpu.to(self.device, non_blocking=True)
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+                    t1_gpu = time.perf_counter()
+                    t_gpu_transfer = t1_gpu - t0_gpu
+
+                    # Forward pass
+                    t0_fwd = time.perf_counter()
+                    if self.use_amp and self.scaler is not None:
+                        with torch.amp.autocast("cuda"):
+                            logits = self.model(x)
+                    else:
+                        logits = self.model(x)
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+                    t1_fwd = time.perf_counter()
+                    t_fwd = t1_fwd - t0_fwd
+
+                    # Loss calculation
+                    t0_loss = time.perf_counter()
+                    if self.use_amp and self.scaler is not None:
+                        with torch.amp.autocast("cuda"):
+                            loss = self.criterion(logits, y) / self.config.grad_accum_steps
+                    else:
+                        loss = self.criterion(logits, y) / self.config.grad_accum_steps
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+                    t1_loss = time.perf_counter()
+                    t_loss = t1_loss - t0_loss
+
+                    # Backward pass
+                    t0_bwd = time.perf_counter()
+                    if self.use_amp and self.scaler is not None:
+                        self.scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+                    t1_bwd = time.perf_counter()
+                    t_bwd = t1_bwd - t0_bwd
+
+                    # Gradient clipping
+                    t0_clip = time.perf_counter()
+                    grad_norm = 0.0
+                    if self.config.gradient_clip_norm > 0:
+                        if self.use_amp and self.scaler is not None:
+                            self.scaler.unscale_(self.optimizer)
+                        norm = nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip_norm)
+                        if norm is not None:
+                            grad_norm = float(norm)
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+                    t1_clip = time.perf_counter()
+                    t_clip = t1_clip - t0_clip
+
+                    # Optimizer step
+                    t0_opt = time.perf_counter()
+                    if self.use_amp and self.scaler is not None:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                        self.optimizer.zero_grad(set_to_none=True)
+                    else:
+                        self.optimizer.step()
+                        self.optimizer.zero_grad(set_to_none=True)
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize()
+                    t1_opt = time.perf_counter()
+                    t_opt = t1_opt - t0_opt
+
+                    if self.ema is not None:
+                        self.ema.update(self.model)
+
+                    t_total_first_batch = (
+                        t_data_load + t_gpu_transfer + t_fwd + t_loss + t_bwd + t_clip + t_opt
+                    )
+
+                    gpu_alloc_after = (
+                        torch.cuda.memory_allocated() / (1024**3)
+                        if self.device.type == "cuda"
+                        else 0.0
+                    )
+                    gpu_res_after = (
+                        torch.cuda.memory_reserved() / (1024**3)
+                        if self.device.type == "cuda"
+                        else 0.0
+                    )
+                    gpu_peak_after = (
+                        torch.cuda.max_memory_allocated() / (1024**3)
+                        if self.device.type == "cuda"
+                        else 0.0
+                    )
+
+                    diag_output = (
+                        f"\nFIRST BATCH DIAGNOSTIC\n"
+                        f"----------------------\n"
+                        f"Data loading:       {t_data_load:.2f} sec\n"
+                        f"Preprocessing:      {t_data_load:.2f} sec (included in data loading)\n"
+                        f"Tensor shape:       {tensor_shape}\n"
+                        f"Tensor dtype:       {tensor_dtype}\n"
+                        f"Tensor device orig: {tensor_device_before}\n"
+                        f"GPU transfer:       {t_gpu_transfer:.2f} sec\n"
+                        f"AASIST forward:     {t_fwd:.2f} sec\n"
+                        f"Loss:               {t_loss:.2f} sec\n"
+                        f"Backward:           {t_bwd:.2f} sec\n"
+                        f"Gradient clipping:  {t_clip:.2f} sec\n"
+                        f"Optimizer step:     {t_opt:.2f} sec\n"
+                        f"Total:              {t_total_first_batch:.2f} sec\n\n"
+                        f"GPU memory:\n"
+                        f"Allocated:          {gpu_alloc_after:.2f} GB\n"
+                        f"Reserved:           {gpu_res_after:.2f} GB\n"
+                        f"Peak allocated:     {gpu_peak_after:.2f} GB\n"
+                    )
+                    print(diag_output, flush=True)
+                    logger.info(diag_output)
+
+                    running_loss += loss.item() * self.config.grad_accum_steps
+                    successful_steps += 1
+                    pbar.update(1)
+                    t_data_start = time.perf_counter()
+                    continue
+
                 t_data = t_batch_start - t_data_start
                 total_data_time += t_data
 
@@ -235,12 +378,21 @@ class ProductionAudioTrainer:
                     if self.use_amp and self.scaler is not None:
                         with torch.amp.autocast("cuda"):
                             logits = self.model(x)
-                            loss = self.criterion(logits, y) / self.config.grad_accum_steps
                     else:
                         logits = self.model(x)
-                        loss = self.criterion(logits, y) / self.config.grad_accum_steps
+
+                    # Compute classification loss in FP32 precision outside autocast
+                    loss = self.criterion(logits.float(), y.long()) / self.config.grad_accum_steps
+                    loss_item = float(loss.item() * self.config.grad_accum_steps)
+
                     t_fwd = time.perf_counter() - t_fwd_start
                     total_fwd_time += t_fwd
+
+                    if torch.isnan(loss) or torch.isinf(loss) or math.isnan(loss_item) or math.isinf(loss_item):
+                        logger.warning("Non-finite loss detected at step %d in Epoch %d (loss=%s). Skipping step.", step + 1, epoch, loss_item)
+                        pbar.update(1)
+                        t_data_start = time.perf_counter()
+                        continue
 
                     # Backward pass timing
                     t_bwd_start = time.perf_counter()
@@ -278,7 +430,6 @@ class ProductionAudioTrainer:
                     if self.ema is not None:
                         self.ema.update(self.model)
 
-                    loss_item = loss.item() * self.config.grad_accum_steps
                     running_loss += loss_item
                     successful_steps += 1
 
@@ -401,9 +552,9 @@ class ProductionAudioTrainer:
             val_time_sec = 0.0
             if self.val_loader is not None:
                 val_metrics = self.validator.evaluate(self.val_loader, self.criterion)
-                val_loss = val_metrics.get("val_loss", 0.0)
-                val_acc = val_metrics.get("accuracy", 0.0)
-                val_eer = val_metrics.get("eer", 0.0)
+                val_loss = val_metrics.get("val_loss")
+                val_acc = val_metrics.get("accuracy")
+                val_eer = val_metrics.get("eer")
                 val_time_sec = val_metrics.get("val_time_sec", 0.0)
 
                 self.history["val_loss"].append(val_loss)
@@ -411,7 +562,7 @@ class ProductionAudioTrainer:
                 self.history["val_eer"].append(val_eer)
 
                 saved_best = False
-                if val_loss < self.best_val_loss:
+                if val_loss is not None and math.isfinite(val_loss) and val_loss < self.best_val_loss:
                     self.best_val_loss = val_loss
                     self.checkpoint_manager.save_best(self.model, epoch, val_metrics)
                     saved_best = True

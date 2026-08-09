@@ -20,6 +20,7 @@ from typing import Tuple
 
 import librosa
 import numpy as np
+import soundfile as sf
 
 from app.config.settings import settings
 from app.core.interfaces import BasePreprocessor
@@ -37,10 +38,17 @@ class AudioPreprocessor(BasePreprocessor):
     ----------
     sample_rate : int | None
         Target sample rate.  Defaults to ``settings.audio.sample_rate``.
+    trim_silence : bool
+        If True, apply silence trimming. Defaults to False for raw AASIST / ASVspoof pipelines.
     """
 
-    def __init__(self, sample_rate: int | None = None) -> None:
+    def __init__(
+        self,
+        sample_rate: int | None = None,
+        trim_silence: bool = False,
+    ) -> None:
         self.sample_rate = sample_rate or settings.audio.sample_rate
+        self.trim_silence_flag = trim_silence
 
     # ── Public API ────────────────────────────
 
@@ -52,8 +60,8 @@ class AudioPreprocessor(BasePreprocessor):
         """
         Full preprocessing pipeline.
 
-        Order (fixed per audit §5.2):
-            load → trim silence → normalise
+        Order:
+            load → optional trim silence → peak normalize
 
         Parameters
         ----------
@@ -66,7 +74,8 @@ class AudioPreprocessor(BasePreprocessor):
             ``(waveform, sample_rate)``
         """
         audio, sr = self.load_audio(audio_path)
-        audio = self.trim_silence(audio)
+        if self.trim_silence_flag:
+            audio = self.trim_silence(audio)
         audio = self.normalize_audio(audio)
         return audio, sr
 
@@ -74,14 +83,7 @@ class AudioPreprocessor(BasePreprocessor):
 
     def load_audio(self, audio_path: str | Path) -> Tuple[np.ndarray, int]:
         """
-        Load and resample an audio file.
-
-        Raises
-        ------
-        FileNotFoundError
-            If the file does not exist.
-        RuntimeError
-            If librosa cannot decode the file.
+        Load and resample an audio file using fast soundfile reader with librosa fallback.
         """
         audio_path = Path(audio_path)
 
@@ -89,17 +91,28 @@ class AudioPreprocessor(BasePreprocessor):
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
         try:
-            audio, sr = librosa.load(str(audio_path), sr=self.sample_rate)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to load audio file '{audio_path}': {exc}"
-            ) from exc
+            audio, sr = sf.read(str(audio_path), dtype="float32")
+            if audio.ndim > 1:
+                audio = np.mean(audio, axis=1)
+            if self.sample_rate is not None and sr != self.sample_rate:
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
+                sr = self.sample_rate
+        except Exception:
+            try:
+                audio, sr = librosa.load(str(audio_path), sr=self.sample_rate)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to load audio file '{audio_path}': {exc}"
+                ) from exc
 
         return audio, sr
 
     def normalize_audio(self, audio: np.ndarray) -> np.ndarray:
         """Peak-normalise the waveform to [-1, 1]."""
-        return librosa.util.normalize(audio)
+        max_val = float(np.max(np.abs(audio)))
+        if max_val > 0.0:
+            return audio / max_val
+        return audio
 
     def trim_silence(self, audio: np.ndarray) -> np.ndarray:
         """Remove leading and trailing silence."""

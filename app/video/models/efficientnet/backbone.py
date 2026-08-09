@@ -35,6 +35,8 @@ class EfficientNetB4Backbone(BaseVideoModel):
             logger.warning(f"Could not load torchvision pretrained weights: {err}. Initializing randomly.")
             self.net = efficientnet_b4(weights=None)
 
+        self.net.classifier = nn.Identity()
+
         if in_channels != 3:
             old_conv = self.net.features[0][0]
             new_conv = nn.Conv2d(

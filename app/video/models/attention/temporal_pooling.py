@@ -50,3 +50,20 @@ class TemporalPooling(nn.Module):
             return torch.sum(attn_weights * x, dim=1)  # (B, D)
         else:
             return x.mean(dim=1)
+
+    def get_attention_weights(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract temporal attention weights over sequence frames.
+
+        Args:
+            x: Input sequence tensor of shape (B, T, D).
+
+        Returns:
+            torch.Tensor: Attention weights of shape (B, T, 1) summing to 1.0 over T.
+        """
+        if self.pooling_type == "attention":
+            return F.softmax(self.attn_query(x), dim=1)
+        else:
+            b, t = x.size(0), x.size(1)
+            weights = torch.full((b, t, 1), 1.0 / t, device=x.device, dtype=x.dtype)
+            return weights
+

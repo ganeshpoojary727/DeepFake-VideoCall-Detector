@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import torch
 
 from app.video.constants.video_constants import IMAGENET_MEAN, IMAGENET_STD

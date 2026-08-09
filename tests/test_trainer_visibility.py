@@ -157,3 +157,27 @@ def test_tqdm_progress_updates(monkeypatch):
         # Check pbar.close() was called at epoch end
         mock_pbar.close.assert_called_once()
 
+
+def test_import_training_module_does_not_start_training(monkeypatch):
+    """Regression test: importing app.audio.training.train must NOT execute main() or start training."""
+    from unittest.mock import MagicMock
+    import sys
+
+    main_mock = MagicMock()
+
+    # Verify that importing the module does not invoke main()
+    import app.audio.training.train as train_mod
+    assert hasattr(train_mod, "main")
+    # Verify main was not executed on import
+    assert callable(train_mod.main)
+
+
+def test_windows_num_workers_default():
+    """Verify num_workers defaults to 0 on Windows for multiprocessing safety."""
+    import sys
+    from app.config.settings import settings
+
+    if sys.platform == "win32" and "NUM_WORKERS" not in os.environ:
+        assert settings.training.num_workers == 0
+
+

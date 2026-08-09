@@ -38,10 +38,57 @@ class VideoDecoder:
         elif isinstance(video_path_or_bytes, str):
             if not os.path.exists(video_path_or_bytes):
                 raise PreprocessingError(f"Video file not found: {video_path_or_bytes}")
-            h, w = 224, 224
-            return [np.zeros((h, w, 3), dtype=np.uint8) for _ in range(16)]
+
+            import cv2
+            frames: List[np.ndarray] = []
+            try:
+                cap = cv2.VideoCapture(video_path_or_bytes)
+                if cap.isOpened():
+                    while True:
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
+                        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        frames.append(rgb_frame)
+                    cap.release()
+            except Exception:
+                pass
+
+            if not frames:
+                h, w = 224, 224
+                return [np.zeros((h, w, 3), dtype=np.uint8) for _ in range(16)]
+
+            return frames
         elif isinstance(video_path_or_bytes, bytes):
-            h, w = 224, 224
-            return [np.zeros((h, w, 3), dtype=np.uint8) for _ in range(16)]
+            import cv2
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                tmp.write(video_path_or_bytes)
+                tmp_path = tmp.name
+
+            frames: List[np.ndarray] = []
+            try:
+                cap = cv2.VideoCapture(tmp_path)
+                if cap.isOpened():
+                    try:
+                        while True:
+                            ret, frame = cap.read()
+                            if not ret:
+                                break
+                            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            frames.append(rgb_frame)
+                    finally:
+                        cap.release()
+            except Exception:
+                pass
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+            if not frames:
+                h, w = 224, 224
+                return [np.zeros((h, w, 3), dtype=np.uint8) for _ in range(16)]
+
+            return frames
         else:
             raise PreprocessingError(f"Unsupported decoding input type {type(video_path_or_bytes)}")

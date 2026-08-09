@@ -13,6 +13,25 @@ from torch.optim import Optimizer
 from app.audio.constants.audio_constants import AUDIO_MODELS_DIR
 
 
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively convert float('nan') and float('inf') to None for valid JSON serialization."""
+    import math
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    elif isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
+
+
 class CheckpointManager:
     """Manager for model checkpoint serialization, deserialization, and artifact output."""
 
@@ -21,6 +40,14 @@ class CheckpointManager:
         self.max_to_keep = max_to_keep
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self._top_checkpoints: List[Tuple[float, Path]] = []
+
+    def is_model_finite(self, model: nn.Module) -> bool:
+        """Check if all model parameters contain finite values (no NaN or Inf)."""
+        for name, param in model.named_parameters():
+            if not torch.isfinite(param).all():
+                logger.error("Model parameter '%s' contains non-finite values (NaN/Inf).", name)
+                return False
+        return True
 
     def save(
         self,
@@ -34,10 +61,14 @@ class CheckpointManager:
     ) -> Path:
         """Save model state, optimizer, scheduler, and metadata to disk."""
         save_path = self.checkpoint_dir / filename
+        if not self.is_model_finite(model):
+            logger.error("Refusing to save checkpoint '%s': model weights contain NaN/Inf.", filename)
+            return save_path
+
         state_dict: Dict[str, Any] = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
-            "metric_value": metric_value,
+            "metric_value": metric_value if (metric_value is not None and torch.tensor(metric_value).isfinite()) else None,
         }
         if optimizer is not None:
             state_dict["optimizer_state_dict"] = optimizer.state_dict()
@@ -52,12 +83,13 @@ class CheckpointManager:
 
         if history is not None:
             try:
+                sanitized_history = _sanitize_for_json(history)
                 with open(self.checkpoint_dir / "training_history.json", "w", encoding="utf-8") as f:
-                    json.dump(history, f, indent=2)
-            except Exception:
-                pass
+                    json.dump(sanitized_history, f, indent=2)
+            except Exception as exc:
+                logger.warning("Could not write training history: %s", exc)
 
-        if metric_value is not None and self.max_to_keep > 0:
+        if metric_value is not None and torch.tensor(metric_value).isfinite() and self.max_to_keep > 0:
             self._manage_top_k(metric_value, save_path)
 
         return save_path
@@ -65,11 +97,15 @@ class CheckpointManager:
     def save_best(self, model: nn.Module, epoch: int, metrics: Dict[str, float]) -> Path:
         """Save best model state as best_model.pt."""
         best_path = self.checkpoint_dir / "best_model.pt"
+        if not self.is_model_finite(model):
+            logger.error("Refusing to save best model checkpoint: model weights contain NaN/Inf.")
+            return best_path
+
         torch.save(
             {
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
-                "metrics": metrics,
+                "metrics": _sanitize_for_json(metrics),
             },
             best_path,
         )
