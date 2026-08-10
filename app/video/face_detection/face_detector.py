@@ -66,11 +66,19 @@ class _YuNetDetector:
     """Wrapper around cv2.FaceDetectorYN (OpenCV 5)."""
 
     def __init__(self, model_path: Path, conf_threshold: float = 0.6) -> None:
+        if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+            cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+        backend_id = getattr(cv2.dnn, "DNN_BACKEND_DEFAULT", 0)
+        target_id = getattr(cv2.dnn, "DNN_TARGET_CPU", 0)
         self._det = cv2.FaceDetectorYN_create(
             str(model_path),
             "",
             (300, 300),
             score_threshold=conf_threshold,
+            nms_threshold=0.3,
+            top_k=5000,
+            backend_id=backend_id,
+            target_id=target_id,
         )
 
     def detect(self, image: np.ndarray, conf: float = 0.6) -> List[FaceBox]:
@@ -141,10 +149,11 @@ class FaceDetector:
     def __init__(self, conf_threshold: float = 0.6) -> None:
         self._impl = None
         self._conf = conf_threshold
-        self._init_detector()
 
     def _init_detector(self) -> None:
         """Try YuNet, fall back to skin detector."""
+        if self._impl is not None:
+            return
         if _download_yunet():
             try:
                 self._impl = _YuNetDetector(_YUNET_PATH, self._conf)
@@ -155,6 +164,17 @@ class FaceDetector:
 
         logger.info("FaceDetector: falling back to skin-colour segmentation")
         self._impl = _SkinDetector()
+
+    def __getstate__(self) -> dict:
+        """Exclude unpicklable C++ OpenCV FaceDetectorYN object during multiprocessing serialization."""
+        state = self.__dict__.copy()
+        state["_impl"] = None
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        """Restore state for worker processes."""
+        self.__dict__.update(state)
+        self._impl = None
 
     # ── Public API ────────────────────────────
 
@@ -173,6 +193,8 @@ class FaceDetector:
             Detected face bounding boxes, sorted by area descending.
         """
         if self._impl is None:
+            self._init_detector()
+
             return []
         try:
             return self._impl.detect(image)

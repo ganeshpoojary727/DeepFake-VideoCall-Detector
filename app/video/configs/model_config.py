@@ -31,7 +31,7 @@ class ModelConfig:
     checkpoint_path: Optional[str] = None
     use_gradient_checkpointing: bool = False
     activation_fn: str = "silu"
-    norm_layer: str = "batchnorm"
+    norm_layer: str = "layernorm"
     dropout: float = 0.2
     input_resolution: Tuple[int, int] = (380, 380)
     extra_params: Dict[str, Any] = field(default_factory=dict)
