@@ -42,7 +42,19 @@ class VoiceDetector:
 
     def _load_model(self, path: Path) -> None:
         """Load AASIST model weights."""
-        state_dict = torch.load(path, map_location=self.device, weights_only=True)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        if isinstance(checkpoint, dict):
+            if "model_state_dict" in checkpoint:
+                state_dict = checkpoint["model_state_dict"]
+            elif "state_dict" in checkpoint:
+                state_dict = checkpoint["state_dict"]
+            elif "model" in checkpoint:
+                state_dict = checkpoint["model"]
+            else:
+                state_dict = checkpoint
+        else:
+            state_dict = checkpoint
+
         model = AASIST(num_classes=settings.model.num_classes)
         model.load_state_dict(state_dict)
         model = model.to(self.device)

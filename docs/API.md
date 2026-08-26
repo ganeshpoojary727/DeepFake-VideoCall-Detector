@@ -1,108 +1,56 @@
-# API Reference
+# ⚡ DeepFake Media Detector — REST API Specification
 
-## Core Interfaces (`app.core.interfaces`)
+The DeepFake Media Detector provides a FastAPI REST service for single-file and batch media analysis.
 
-### `PredictionResult`
-```python
-@dataclass
-class PredictionResult:
-    label: DetectionLabel      # REAL, FAKE, UNCERTAIN
-    confidence: float          # 0.0 – 1.0
-    modality: Modality         # AUDIO, VIDEO, FUSED
-    latency_ms: float          # inference time
-    model_version: str
+## Endpoints
+
+### 1. Detect Single File
+- **Route**: `POST /detect/file`
+- **Content-Type**: `multipart/form-data`
+- **Form Param**: `file` (Binary media file)
+- **Response**: `200 OK`
+```json
+{
+  "verdict": "FAKE",
+  "confidence": 0.8842,
+  "media_type": "video",
+  "scores": {
+    "video": 0.825,
+    "audio": 0.9237,
+    "fused": 0.8842
+  },
+  "processing_time_ms": 1420.5,
+  "metadata": {
+    "original_filename": "sample.mp4",
+    "num_frames": 16,
+    "num_faces_detected": 16
+  }
+}
 ```
 
-### `EvaluationResult`
-```python
-@dataclass
-class EvaluationResult:
-    accuracy: float
-    precision: float
-    recall: float
-    f1: float
-    eer: float | None          # Equal Error Rate
-    confusion_matrix: ndarray
-    classification_report: str
+### 2. Detect Batch Files
+- **Route**: `POST /detect/batch`
+- **Content-Type**: `multipart/form-data`
+- **Form Param**: `files` (Array of binary media files)
+- **Response**: `200 OK` (Array of `AnalysisReport`)
+
+### 3. System & Model Health
+- **Route**: `GET /health`
+- **Response**: `200 OK`
+```json
+{
+  "status": "healthy",
+  "device": "cuda",
+  "cuda_available": true,
+  "torch_version": "2.11.0+cu128",
+  "gpu_name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "models": {
+    "audio_aasist": {
+      "checkpoint_exists": true
+    },
+    "video_efficientnet_transformer": {
+      "checkpoint_exists": true
+    }
+  }
+}
 ```
-
-### `DetectionLabel` (Enum)
-`REAL`, `FAKE`, `UNCERTAIN`
-
-### `Modality` (Enum)
-`AUDIO`, `VIDEO`, `FUSED`
-
----
-
-## Models (`app.audio.models`)
-
-### `DeepFakeCNN(num_classes=2)`
-Lightweight CNN for Mel-spectrogram classification.
-
-### `ModelLoader(model_path, device, expected_hash)`
-- `.load(warmup=True) → DeepFakeCNN`
-
----
-
-## Preprocessing (`app.audio.preprocessing`)
-
-### `AudioPreprocessor(sample_rate=16000)`
-- `.preprocess(audio_path) → (ndarray, int)`
-- `.load_audio(path) → (ndarray, int)`
-- `.normalize_audio(audio) → ndarray`
-- `.trim_silence(audio) → ndarray`
-
-### `FeatureExtractor(apply_augmentation=False)`
-- `.extract(audio) → Tensor`
-- `.create_mel_spectrogram(audio) → ndarray`
-- `.normalize_spectrogram(mel_db) → ndarray`
-- `.spec_augment(tensor) → Tensor`
-
----
-
-## Inference (`app.audio.inference`)
-
-### `Predictor(model, device, threshold_fake, threshold_real)`
-- `.predict(audio_path) → PredictionResult`
-
-### `VoiceDetector(predictor)`
-- `.detect(duration=5) → PredictionResult`
-
-### `PredictionManager(audio_predictor, video_detector)`
-- `.predict_audio(path) → PredictionResult`
-- `.predict_fused(audio_path, video_input) → PredictionResult`
-
----
-
-## Services (`app.services`)
-
-### `DetectionService(on_result=None)`
-- `.initialise(model_path=None)`
-- `.detect_file(audio_path) → PredictionResult`
-- `.detect_fused(audio_path, video_input) → PredictionResult`
-
-### `MonitoringService()`
-- `.check_video_calls() → VideoCallStatus`
-
----
-
-## Training (`app.audio.training`)
-
-### `Trainer(model, train_loader, validation_loader, optimizer, criterion, device, ...)`
-- `.fit(epochs, save_path) → None`
-- `.train_one_epoch() → EpochMetrics`
-- `.validate() → EpochMetrics`
-- `.save_checkpoint(epoch, path)`
-- `.load_checkpoint(path) → int`
-
----
-
-## Configuration (`app.config.settings`)
-
-### `settings` (module-level singleton)
-- `.audio` → `AudioConfig`
-- `.training` → `TrainingConfig`
-- `.model` → `ModelConfig`
-- `.inference` → `InferenceConfig`
-- `.DEVICE` → `torch.device` (lazy)
-- `.validate() → list[str]`

@@ -1,58 +1,29 @@
-# GUI Architecture
+# 🌐 DeepFake Media Detector — User Interfaces
 
-## Framework
+The DeepFake Media Detector provides two frontend interfaces:
 
-PyQt6 — professional-grade Qt bindings for Python.
+## 1. Streamlit Web App (Built-in Python UI)
 
-## Launch
-
+### Launch Command
 ```bash
-python -m app.main gui
+python -m app.main ui
+# Or directly:
+streamlit run app/ui/streamlit_app.py
 ```
 
-## Layout
+### Features
+- **Single File Analyzer**: Drag & drop Image, Video, or Audio file with instant media playback and confidence gauge.
+- **Batch Scanner**: Upload multiple files simultaneously, view live progress, inspect summary statistics, and export reports to CSV or JSON.
+- **Hardware Telemetry**: Real-time CUDA GPU name, VRAM allocation, and model status.
 
-```
-┌──────────────────────────────────────────────────┐
-│  DeepFake Video Call Detector           ─  □  ×  │
-├──────────────────────────────────────────────────┤
-│  ┌─────────┐  ┌────────────────────────────────┐ │
-│  │ 🏠 Home │  │         Content Area           │ │
-│  │ 🎤 Audio│  │  (Stacked pages switched by    │ │
-│  │ 📷 Video│  │   sidebar navigation)          │ │
-│  │ 📊 Hist │  │                                │ │
-│  │ ⚙️ Set  │  │                                │ │
-│  └─────────┘  └────────────────────────────────┘ │
-├──────────────────────────────────────────────────┤
-│  Device: cuda | Model: v2.0 | No video call      │
-└──────────────────────────────────────────────────┘
-```
+---
 
-## Architecture (MVVM-Ready)
+## 2. Next.js + Framer Motion Frontend (Modern Web Client)
 
-```
-View Layer (PyQt6 widgets)
-    ↕  data binding
-ViewModel Layer (state management)
-    ↕  method calls
-Service Layer (DetectionService, MonitoringService)
-    ↕  method calls
-AI Layer (Predictor, Model)
-```
+A standalone React/Next.js frontend communicating via the FastAPI REST API (`http://localhost:8000`).
 
-## Current Pages
-
-| Page | Status | Description |
-|------|--------|-------------|
-| Home | ✅ Implemented | Project info, device, video call status |
-| Audio Detection | 🔲 Skeleton | Future: real-time audio detection |
-| Video Detection | 🔲 Skeleton | Future: video deepfake detection |
-| History | 🔲 Skeleton | Future: past detection results |
-| Settings | 🔲 Skeleton | Future: configuration editor |
-
-## Extending
-
-To add a new page:
-1. Create a `QWidget` subclass
-2. Add it to the `QStackedWidget`
-3. Add a sidebar entry
+### Architecture
+- **Framework**: Next.js App Router + TypeScript
+- **Styling**: Tailwind CSS + shadcn/ui
+- **Animation**: Framer Motion (animated scanning laser, radial progress, spring verdict cards)
+- **API**: Communicates with `POST http://localhost:8000/detect/file`

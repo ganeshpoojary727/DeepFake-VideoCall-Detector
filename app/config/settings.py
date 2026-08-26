@@ -1,5 +1,5 @@
 """
-Centralized configuration for the DeepFake Video Call Detector.
+Centralized configuration for the DeepFake Detector.
 
 Design decisions
 ────────────────
@@ -16,7 +16,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 
 # ──────────────────────────────────────────────
@@ -33,8 +33,6 @@ class AudioConfig:
     n_fft: int = int(os.getenv("N_FFT", "2048"))
     hop_length: int = int(os.getenv("HOP_LENGTH", "512"))
     target_length: int = int(os.getenv("TARGET_LENGTH", "100"))
-    recording_duration: int = int(os.getenv("RECORDING_DURATION", "5"))
-    audio_source: str = os.getenv("AUDIO_SOURCE", "loopback")  # "loopback" or "mic"
 
 
 @dataclass
@@ -79,40 +77,6 @@ class InferenceConfig:
     )
     audio_fusion_weight: float = 0.60
     video_fusion_weight: float = 0.40
-    auto_detect: bool = os.getenv("AUTO_DETECT", "true").lower() == "true"
-    video_source: str = os.getenv("VIDEO_SOURCE", "screen")  # "screen" or "webcam"
-
-
-# ──────────────────────────────────────────────
-# Video Call Process Mappings
-# ──────────────────────────────────────────────
-
-VIDEO_CALL_PROCESSES: Dict[str, str] = {
-    "zoom.exe": "Zoom",
-    "whatsapp.exe": "WhatsApp",
-    "teams.exe": "Microsoft Teams",
-    "msteams.exe": "Microsoft Teams",
-    "skype.exe": "Skype",
-    "skypehost.exe": "Skype",
-    "webex.exe": "Cisco Webex",
-    "atmgr.exe": "Cisco Webex",
-    "telegram.exe": "Telegram",
-    "discord.exe": "Discord",
-    "slack.exe": "Slack",
-}
-
-# Browser processes that may host web-based video calls
-BROWSER_PROCESSES = {
-    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe",
-}
-
-# Keywords in browser window titles indicating an active video call
-BROWSER_CALL_KEYWORDS = {
-    "meet.google.com", "google meet",
-    "zoom.us", "zoom meeting",
-    "teams.microsoft.com", "microsoft teams",
-    "webex meeting",
-}
 
 
 # ──────────────────────────────────────────────
@@ -126,9 +90,6 @@ class Settings:
     Top-level project configuration.
 
     Access sub-configs via ``settings.audio``, ``settings.training``, etc.
-
-    The ``device`` property lazily imports torch so that non-GPU code paths
-    (tests, config reading) don't pay the CUDA initialisation cost.
     """
 
     # ── Sub-configs ───────────────────────────
@@ -141,11 +102,6 @@ class Settings:
     project_root: Path = field(
         default_factory=lambda: Path(__file__).resolve().parents[2]
     )
-
-    # ── Real-Time Detection Constants ─────────
-    INITIAL_WARMUP_SEC: int = 20
-    INCREMENTAL_CHUNK_SEC: int = 20
-    VIDEO_TARGET_FPS: int = 5
 
     # ── Fusion Weights (shortcuts) ────────────
     AUDIO_WEIGHT: float = 0.60

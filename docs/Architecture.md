@@ -1,72 +1,45 @@
-# System Architecture
+# 📐 DeepFake Media Detector — Architecture Specification
 
 ## Overview
 
-The DeepFake Video Call Detector follows a layered architecture with clear separation of concerns:
+The DeepFake Media Detector is an AI-powered static media classification system for Image, Video, and Audio content.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                 Presentation Layer                    │
-│              (GUI / CLI / main.py)                    │
-├─────────────────────────────────────────────────────┤
-│                  Service Layer                       │
-│     (DetectionService, MonitoringService)             │
-├─────────────────────────────────────────────────────┤
-│                    AI Layer                          │
-│  (Models, Preprocessing, Training, Inference)        │
-├─────────────────────────────────────────────────────┤
-│                  Domain Layer                        │
-│   (Interfaces, Entities, Enums — core/)              │
-├─────────────────────────────────────────────────────┤
-│               Infrastructure Layer                   │
-│          (Config, Logger, Helpers)                    │
-└─────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    Input([User File: Image / Video / Audio]) --> Router[MediaRouter]
+    
+    Router -->|Image: .jpg, .png, .webp...| IA[ImageAnalyzer<br>EfficientNet-B4 + YuNet]
+    Router -->|Audio: .wav, .mp3, .flac...| AA[AudioAnalyzer<br>AASIST Graph Attention]
+    Router -->|Video: .mp4, .avi, .mov...| VA[VideoAnalyzer<br>Spatiotemporal Transformer + Librosa Audio Extraction]
+    
+    IA --> Report[AnalysisReport]
+    AA --> Report
+    VA --> Report
+    
+    Report --> Out[FastAPI REST API / Streamlit Web UI / CLI]
 ```
 
-## Design Patterns
+## Modality Subsystems
 
-| Pattern | Where | Purpose |
-|---------|-------|---------|
-| **Factory** | `ModelLoader`, DataLoader factories | Create complex objects with configuration |
-| **Strategy** | `BaseFeatureExtractor` hierarchy | Swap mel/MFCC/LFCC extractors |
-| **Template Method** | `BaseDetector.detect()` | Common detection flow |
-| **Singleton** | `settings` module-level instance | Single configuration source |
-| **Dependency Injection** | All services accept dependencies | Testability |
-| **Observer** | `DetectionService.on_result` callback | Decouple detection from UI |
+### 1. Audio Deepfake Detection (AASIST)
+- **Model**: Audio Anti-Spoofing using Integrated Spectro-Temporal Graph Attention Networks.
+- **Dataset**: ASVspoof 2019 Logical Access (LA).
+- **Performance**: 99.71% accuracy, 0.52% Equal Error Rate (EER).
+- **Input**: Raw 1D waveform, 16,000 Hz, 64,600 samples.
 
-## Data Flow
+### 2. Video Deepfake Detection (EfficientNet-B4 + Transformer)
+- **Model**: EfficientNet-B4 spatial backbone + Sinusoidal Positional Encoding + Multi-Head Temporal Self-Attention.
+- **Dataset**: FaceForensics++ (FF++).
+- **Preprocessing**: Uniform sampling of 16 frames, YuNet ONNX face detection, 20% margin adaptive cropping, 224×224 ImageNet normalization.
 
-### Training Pipeline
-```
-ASVspoof2019 FLAC → AudioPreprocessor (load → trim → normalize)
-    → FeatureExtractor (mel → dB → normalize → resize → tensor)
-    → AudioDataset (protocol parsing + caching)
-    → DataLoader (batching + workers)
-    → Trainer (train + validate + early stop + checkpoint)
-    → best_model.pth
-```
+### 3. Image Deepfake Detection
+- **Model**: Single-frame mode using EfficientNet-B4 spatial backbone.
+- **Preprocessing**: YuNet face detection and 224×224 resolution cropping.
 
-### Inference Pipeline
-```
-Audio Input (file or mic) → AudioPreprocessor → FeatureExtractor
-    → DeepFakeCNN (forward pass) → Softmax → Three-way decision
-    → PredictionResult (REAL / FAKE / UNCERTAIN)
-```
-
-## Module Dependencies
-
-```
-core/interfaces.py       ← NO dependencies (domain layer)
-config/settings.py       ← pathlib, os (infrastructure)
-utils/logger.py          ← config
-utils/helpers.py         ← config, logger
-ai/models/cnn_model.py   ← torch (no project deps)
-ai/preprocessing/        ← config, core, logger
-ai/datasets/             ← preprocessing, config, logger
-ai/training/             ← config, logger
-ai/evaluation/           ← core, logger
-ai/inference/            ← preprocessing, core, config, helpers, logger
-services/                ← ai/inference, ai/models, config, logger
-gui/                     ← services, config, logger
-main.py                  ← all (entry point)
-```
+### 4. Multimodal Fusion
+- When video files contain audio tracks, the system computes:
+  $$\text{Score}_{\text{final}} = 0.6 \times \text{Score}_{\text{audio}} + 0.4 \times \text{Score}_{\text{video}}$$
+- **Decision Thresholds**:
+  - $\ge 0.70 \rightarrow \text{FAKE}$
+  - $\le 0.30 \rightarrow \text{REAL}$
+  - Otherwise $\rightarrow \text{UNCERTAIN}$
