@@ -66,7 +66,9 @@ class ForensicReport(BaseModel):
 
 class DetectionResponse(BaseModel):
     verdict: str = Field(..., description="REAL, FAKE, or UNCERTAIN")
-    confidence: float = Field(..., description="Fake probability from 0.0 to 1.0")
+    confidence: float = Field(..., description="Verdict confidence from 0.0 to 1.0")
+    real_confidence: float = Field(default=0.5, description="Calibrated authenticity probability from 0.0 to 1.0")
+    fake_confidence: float = Field(default=0.5, description="Calibrated deepfake probability from 0.0 to 1.0")
     media_type: str = Field(..., description="image, video, or audio")
     scores: Dict[str, float | None] = Field(default_factory=dict)
     processing_time_ms: float = Field(..., description="Latency in milliseconds")

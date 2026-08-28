@@ -7,7 +7,7 @@ export interface DiagnosticFactor {
 }
 
 export interface ForensicReport {
-  threat_level: "CLEAN" | "LOW" | "MODERATE" | "HIGH" | "CRITICAL";
+  threat_level: "AUTHENTIC" | "CLEAN" | "LOW" | "MODERATE" | "HIGH" | "CRITICAL";
   diagnostic_factors: DiagnosticFactor[];
   narrative_conclusion: string;
   key_indicators: string[];
@@ -15,7 +15,9 @@ export interface ForensicReport {
 
 export interface AnalysisReport {
   verdict: "REAL" | "FAKE" | "UNCERTAIN";
-  confidence: number; // 0.0 - 1.0
+  confidence: number; // 0.0 - 1.0 (verdict confidence)
+  real_confidence: number; // 0.0 - 1.0
+  fake_confidence: number; // 0.0 - 1.0
   media_type: "image" | "video" | "audio" | "unknown";
   scores: {
     video?: number | null;
@@ -35,6 +37,7 @@ export interface AnalysisReport {
     sample_rate?: number;
     duration_seconds?: number;
     model?: string;
+    forensic_signals?: Record<string, any>;
     error?: string;
     [key: string]: any;
   };

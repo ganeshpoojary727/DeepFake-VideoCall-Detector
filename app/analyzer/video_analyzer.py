@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Optional, Union
 
+import numpy as np
 import torch
 
 from app.analyzer.analysis_report import AnalysisReport
@@ -31,18 +32,13 @@ from app.video.pipeline.inference_pipeline import InferencePipeline
 
 logger = get_logger(__name__)
 
-_THRESHOLD_FAKE = 0.70
-_THRESHOLD_REAL = 0.30
+_THRESHOLD_FAKE = 0.65
+_THRESHOLD_REAL = 0.35
 
 
 class VideoAnalyzer:
     """Video deepfake analyzer with automatic audio track extraction
     and multimodal fusion.
-
-    Parameters
-    ----------
-    device : torch.device, optional
-        Compute device.  Falls back to ``settings.DEVICE``.
     """
 
     def __init__(self, device: Optional[torch.device] = None) -> None:
@@ -58,7 +54,6 @@ class VideoAnalyzer:
             return
 
         logger.info("VideoAnalyzer: loading EfficientNet-B4 + Temporal Transformer")
-
         config = VideoInferenceConfig()
         config.device = str(self._device)
 
@@ -85,20 +80,7 @@ class VideoAnalyzer:
     # ── Public API ────────────────────────────
 
     def analyze(self, file_path: Union[str, Path]) -> AnalysisReport:
-        """Analyze a video file for deepfake content.
-
-        Runs both video-frame analysis and audio-track analysis (if an
-        audio track is present), then fuses the scores.
-
-        Parameters
-        ----------
-        file_path : str | Path
-            Path to the video file.
-
-        Returns
-        -------
-        AnalysisReport
-        """
+        """Analyze a video file for deepfake content."""
         start = time.perf_counter()
         file_path = Path(file_path)
 
@@ -118,37 +100,45 @@ class VideoAnalyzer:
         # ── 3. Fuse or fall back ──────────────
         if audio_score is not None:
             fusion = self._fusion.evaluate(audio_score, video_score)
-            final_prob = float(fusion["combined_score"])
+            final_fake_prob = float(fusion["combined_score"])
             method = "multimodal_fusion"
         else:
-            final_prob = video_score
+            final_fake_prob = video_score
             method = "video_only"
 
+        final_fake_prob = float(np.clip(final_fake_prob, 0.01, 0.99))
+        final_real_prob = float(round(1.0 - final_fake_prob, 4))
+
         # ── 4. Three-way verdict ──────────────
-        if final_prob >= _THRESHOLD_FAKE:
+        if final_fake_prob >= _THRESHOLD_FAKE:
             verdict = "FAKE"
-        elif final_prob <= _THRESHOLD_REAL:
+            verdict_confidence = final_fake_prob
+        elif final_real_prob >= (1.0 - _THRESHOLD_REAL):
             verdict = "REAL"
+            verdict_confidence = final_real_prob
         else:
             verdict = "UNCERTAIN"
+            verdict_confidence = max(final_real_prob, final_fake_prob)
 
         elapsed = (time.perf_counter() - start) * 1000.0
 
         logger.info(
-            "VideoAnalyzer: %s → %s (fused=%.4f, video=%.4f, audio=%s, %.1fms)",
-            file_path.name, verdict, final_prob, video_score,
+            "VideoAnalyzer: %s → %s (Real=%.2f%%, Fake=%.2f%%, video=%.4f, audio=%s, %.1fms)",
+            file_path.name, verdict, final_real_prob * 100, final_fake_prob * 100, video_score,
             f"{audio_score:.4f}" if audio_score is not None else "N/A",
             elapsed,
         )
 
         return AnalysisReport(
             verdict=verdict,
-            confidence=final_prob,
+            confidence=round(verdict_confidence, 4),
             media_type="video",
+            real_confidence=round(final_real_prob, 4),
+            fake_confidence=round(final_fake_prob, 4),
             scores={
-                "video": video_score,
-                "audio": audio_score,
-                "fused": final_prob if audio_score is not None else None,
+                "video": round(video_score, 4),
+                "audio": round(audio_score, 4) if audio_score is not None else None,
+                "fused": round(final_fake_prob, 4) if audio_score is not None else None,
             },
             processing_time_ms=round(elapsed, 1),
             metadata={
@@ -164,10 +154,7 @@ class VideoAnalyzer:
     # ── Private helpers ───────────────────────
 
     def _extract_and_analyze_audio(self, video_path: Path) -> Optional[float]:
-        """Extract audio track from a video file and return spoof probability.
-
-        Returns ``None`` if the video has no audio or extraction fails.
-        """
+        """Extract audio track from a video file and return spoof probability."""
         try:
             import librosa
             audio, sr = librosa.load(str(video_path), sr=16000, mono=True)

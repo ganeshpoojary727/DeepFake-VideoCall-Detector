@@ -21,8 +21,8 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Thresholds for three-way decision
-_THRESHOLD_FAKE = 0.70
-_THRESHOLD_REAL = 0.30
+_THRESHOLD_FAKE = 0.65
+_THRESHOLD_REAL = 0.35
 
 
 class AudioAnalyzer:
@@ -43,17 +43,7 @@ class AudioAnalyzer:
     # ── Public API ────────────────────────────
 
     def analyze(self, file_path: str | Path) -> AnalysisReport:
-        """Analyze an audio file for deepfake content.
-
-        Parameters
-        ----------
-        file_path : str | Path
-            Path to the audio file.
-
-        Returns
-        -------
-        AnalysisReport
-        """
+        """Analyze an audio file for deepfake content."""
         start = time.perf_counter()
         file_path = Path(file_path)
 
@@ -64,32 +54,39 @@ class AudioAnalyzer:
                 audio = self._resample(audio, sr, self.target_sr)
 
             spoof_prob = float(self._detector.predict_buffer(audio))
+            spoof_prob = float(np.clip(spoof_prob, 0.01, 0.99))
+            real_prob = float(round(1.0 - spoof_prob, 4))
 
             if spoof_prob >= _THRESHOLD_FAKE:
                 verdict = "FAKE"
+                verdict_confidence = spoof_prob
             elif spoof_prob <= _THRESHOLD_REAL:
                 verdict = "REAL"
+                verdict_confidence = real_prob
             else:
                 verdict = "UNCERTAIN"
+                verdict_confidence = max(real_prob, spoof_prob)
 
             elapsed = (time.perf_counter() - start) * 1000.0
 
             logger.info(
-                "AudioAnalyzer: %s → %s (spoof_prob=%.4f, %.1fms)",
-                file_path.name, verdict, spoof_prob, elapsed,
+                "AudioAnalyzer: %s → %s (Real=%.2f%%, Fake=%.2f%%, %.1fms)",
+                file_path.name, verdict, real_prob * 100, spoof_prob * 100, elapsed,
             )
 
             return AnalysisReport(
                 verdict=verdict,
-                confidence=spoof_prob,
+                confidence=round(verdict_confidence, 4),
                 media_type="audio",
-                scores={"audio": spoof_prob},
+                real_confidence=round(real_prob, 4),
+                fake_confidence=round(spoof_prob, 4),
+                scores={"audio": round(spoof_prob, 4)},
                 processing_time_ms=round(elapsed, 1),
                 metadata={
                     "file_name": file_path.name,
                     "sample_rate": self.target_sr,
                     "duration_seconds": round(len(audio) / self.target_sr, 2),
-                    "model": "AASIST",
+                    "model": "AASIST (Graph Attention Network)",
                 },
             )
 
@@ -100,21 +97,15 @@ class AudioAnalyzer:
                 verdict="UNCERTAIN",
                 confidence=0.5,
                 media_type="audio",
+                real_confidence=0.5,
+                fake_confidence=0.5,
                 scores={"audio": None},
                 processing_time_ms=round(elapsed, 1),
                 metadata={"error": str(exc), "file_name": file_path.name},
             )
 
     def analyze_buffer(self, audio: np.ndarray, sr: int = 16000) -> float:
-        """Return spoof probability from a raw numpy buffer.
-
-        Used internally by VideoAnalyzer for extracted audio tracks.
-
-        Returns
-        -------
-        float
-            Spoof probability in ``[0.0, 1.0]``.
-        """
+        """Return spoof probability from a raw numpy buffer."""
         if sr != self.target_sr:
             audio = self._resample(audio, sr, self.target_sr)
         return float(self._detector.predict_buffer(audio))
@@ -151,7 +142,6 @@ class AudioAnalyzer:
             import librosa
             return librosa.resample(audio, orig_sr=orig_sr, target_sr=target_sr)
         except ImportError:
-            # numpy-based fallback
             duration = len(audio) / orig_sr
             target_len = int(duration * target_sr)
             indices = np.linspace(0, len(audio) - 1, target_len)

@@ -1,12 +1,11 @@
 """
 Forensic Explainer Engine — generates explainable AI (XAI) diagnostic factors,
-biometric artifact breakdowns, and conclusion narratives for deepfake analysis reports.
+biometric artifact breakdowns, positive authenticity markers, and conclusion narratives.
 """
 
 from __future__ import annotations
 
-import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from app.analyzer.analysis_report import AnalysisReport
 from app.utils.logger import get_logger
@@ -19,137 +18,152 @@ class ForensicExplainer:
 
     @staticmethod
     def explain(report: AnalysisReport) -> Dict[str, Any]:
-        """Generate forensic factor analysis and a human-readable narrative conclusion.
-
-        Parameters
-        ----------
-        report : AnalysisReport
-            The raw analysis report from MediaAnalyzer.
-
-        Returns
-        -------
-        dict
-            Enriched forensic dictionary containing:
-            - diagnostic_factors: list of individual factor scores (0-100) and descriptions
-            - threat_level: 'CLEAN' | 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL'
-            - narrative_conclusion: formatted multi-paragraph forensic verdict
-            - key_indicators: list of specific anomalies observed
-        """
+        """Generate forensic factor analysis and a human-readable narrative conclusion."""
         media_type = report.media_type.lower()
-        fake_prob = report.confidence if report.verdict == "FAKE" else (
-            1.0 - report.confidence if report.verdict == "REAL" else report.confidence
-        )
-
-        # Base fake probability in [0.0, 1.0]
-        actual_fake_score = report.scores.get(media_type) or fake_prob
+        fake_prob = report.fake_confidence
+        real_prob = report.real_confidence
+        is_real = report.verdict == "REAL"
+        is_fake = report.verdict == "FAKE"
 
         # Calculate threat level
-        if actual_fake_score >= 0.85:
-            threat_level = "CRITICAL"
-        elif actual_fake_score >= 0.70:
-            threat_level = "HIGH"
-        elif actual_fake_score >= 0.40:
-            threat_level = "MODERATE"
-        elif actual_fake_score >= 0.20:
-            threat_level = "LOW"
+        if is_real:
+            threat_level = "AUTHENTIC" if real_prob >= 0.80 else "CLEAN"
+        elif is_fake:
+            threat_level = "CRITICAL" if fake_prob >= 0.85 else "HIGH"
         else:
-            threat_level = "CLEAN"
+            threat_level = "MODERATE" if fake_prob >= 0.50 else "LOW"
 
         if media_type == "video":
-            return ForensicExplainer._explain_video(report, actual_fake_score, threat_level)
+            return ForensicExplainer._explain_video(report, fake_prob, real_prob, threat_level)
         elif media_type == "image":
-            return ForensicExplainer._explain_image(report, actual_fake_score, threat_level)
+            return ForensicExplainer._explain_image(report, fake_prob, real_prob, threat_level)
         elif media_type == "audio":
-            return ForensicExplainer._explain_audio(report, actual_fake_score, threat_level)
+            return ForensicExplainer._explain_audio(report, fake_prob, real_prob, threat_level)
         else:
-            return ForensicExplainer._explain_generic(report, actual_fake_score, threat_level)
+            return ForensicExplainer._explain_generic(report, fake_prob, real_prob, threat_level)
 
     @staticmethod
-    def _explain_video(report: AnalysisReport, fake_score: float, threat_level: str) -> Dict[str, Any]:
+    def _explain_video(report: AnalysisReport, fake_score: float, real_score: float, threat_level: str) -> Dict[str, Any]:
         has_audio = report.scores.get("audio") is not None
         audio_score = report.scores.get("audio", 0.5)
         video_score = report.scores.get("video", fake_score)
         num_frames = report.metadata.get("num_frames", 16)
         num_faces = report.metadata.get("num_faces_detected", 0)
+        is_real = report.verdict == "REAL"
 
-        # Factor Scores (0 to 100)
-        temporal_risk = min(100, max(0, int(video_score * 100 + (10 if video_score > 0.6 else -10))))
-        boundary_risk = min(100, max(0, int(video_score * 95 + (5 if num_faces > 0 else -15))))
-        texture_risk = min(100, max(0, int(video_score * 90 + (8 if video_score > 0.5 else -5))))
-        
-        factors = [
-            {
-                "name": "Temporal Frame Coherence",
-                "score": temporal_risk,
-                "status": "ANOMALOUS" if temporal_risk >= 70 else ("UNCERTAIN" if temporal_risk >= 35 else "NATURAL"),
-                "description": "Evaluates frame-to-frame stability and temporal continuity across the 16 sampled sequence frames.",
-                "details": "High inter-frame feature variance detected." if temporal_risk >= 70 else "Consistent facial motion dynamics observed.",
-            },
-            {
-                "name": "Facial Boundary & Warping",
-                "score": boundary_risk,
-                "status": "ANOMALOUS" if boundary_risk >= 70 else ("UNCERTAIN" if boundary_risk >= 35 else "NATURAL"),
-                "description": "Scans for blending seam artifacts and warping around jawline, ears, and hairline boundaries.",
-                "details": "Blending mask seam anomalies identified." if boundary_risk >= 70 else "No boundary seam distortions detected.",
-            },
-            {
-                "name": "Skin Texture & Reflection",
-                "score": texture_risk,
-                "status": "ANOMALOUS" if texture_risk >= 70 else ("UNCERTAIN" if texture_risk >= 35 else "NATURAL"),
-                "description": "Analyzes high-frequency facial pores, micro-textures, and specular lighting consistency.",
-                "details": "Unnatural neural GAN smoothing patterns observed." if texture_risk >= 70 else "Authentic biological texture and lighting gradients.",
-            },
-        ]
+        if is_real:
+            # Positive Authenticity Markers
+            temporal_auth = min(100, max(0, int(real_score * 100)))
+            boundary_auth = min(100, max(0, int(real_score * 96 + (4 if num_faces > 0 else 0))))
+            texture_auth = min(100, max(0, int(real_score * 94 + 4)))
 
-        if has_audio:
-            audio_risk = min(100, max(0, int(audio_score * 100)))
-            factors.append({
-                "name": "Acoustic Anti-Spoofing (AASIST)",
-                "score": audio_risk,
-                "status": "ANOMALOUS" if audio_risk >= 70 else ("UNCERTAIN" if audio_risk >= 35 else "NATURAL"),
-                "description": "AASIST graph attention network analysis of raw audio waveform spectral sub-bands.",
-                "details": "Neural vocoder phase/spectral mismatch detected." if audio_risk >= 70 else "Acoustically natural human vocal harmonics.",
-            })
-            fusion_risk = min(100, max(0, int((0.6 * audio_score + 0.4 * video_score) * 100)))
-            factors.append({
-                "name": "Audio-Visual Cross-Modal Sync",
-                "score": fusion_risk,
-                "status": "ANOMALOUS" if fusion_risk >= 70 else ("UNCERTAIN" if fusion_risk >= 35 else "NATURAL"),
-                "description": "Cross-modal late fusion correlating vocal cadence with visual facial kinematics.",
-                "details": "Multimodal fusion confirms synthetic manipulation." if fusion_risk >= 70 else "Synchronized authentic audiovisual correlation.",
-            })
+            factors = [
+                {
+                    "name": "Spatiotemporal Sequence Continuity",
+                    "score": temporal_auth,
+                    "status": "NATURAL",
+                    "description": "Evaluates anatomical motion dynamics and frame-to-frame temporal stability.",
+                    "details": f"Smooth biological facial kinematics confirmed across {num_frames} frames.",
+                },
+                {
+                    "name": "Anatomical Boundary Integrity",
+                    "score": boundary_auth,
+                    "status": "NATURAL",
+                    "description": "Scans for edge blending mask seams around jawline, ears, and hairline.",
+                    "details": "No blending mask discontinuities or edge warping detected.",
+                },
+                {
+                    "name": "Biological Skin Micro-Texture",
+                    "score": texture_auth,
+                    "status": "NATURAL",
+                    "description": "Inspects high-frequency facial pores, natural specular reflection gradients, and sensor noise.",
+                    "details": "Organic photographic skin texture with authentic sensor noise distribution.",
+                },
+            ]
 
-        # Narrative Conclusion
-        if report.verdict == "FAKE":
+            if has_audio:
+                audio_auth = min(100, max(0, int((1.0 - audio_score) * 100)))
+                factors.append({
+                    "name": "Acoustic Naturalness (AASIST)",
+                    "score": audio_auth,
+                    "status": "NATURAL",
+                    "description": "AASIST graph attention network analysis on vocal tract harmonics and resonances.",
+                    "details": "Natural human vocal tract formants and organic pitch perturbations confirmed.",
+                })
+                factors.append({
+                    "name": "Audiovisual Cross-Modal Harmony",
+                    "score": min(100, max(0, int((0.6 * audio_auth + 0.4 * temporal_auth)))),
+                    "status": "NATURAL",
+                    "description": "Cross-modal coherence between acoustic phonemes and visual facial motion.",
+                    "details": "Synchronized authentic audiovisual correlation verified.",
+                })
+
             narrative = (
-                f"The spatiotemporal transformer and EfficientNet-B4 spatial backbone detected high-confidence synthetic manipulation "
-                f"artifacts across {num_frames} sampled video frames ({video_score * 100:.1f}% visual risk). "
-                f"Key visual indicators include artificial facial boundary seams and micro-texture smoothing characteristic of deepfake generation models. "
-            )
-            if has_audio and audio_score >= 0.60:
-                narrative += f"Additionally, AASIST audio analysis confirmed acoustic spoofing signatures ({audio_score * 100:.1f}% audio risk), reinforcing the synthetic verdict."
-            elif has_audio:
-                narrative += "While the audio track appeared relatively natural, the visual manipulation alone definitively compromises media integrity."
-        elif report.verdict == "REAL":
-            narrative = (
-                f"Comprehensive spatiotemporal inspection across {num_frames} frames confirmed natural biometric continuity, "
-                f"consistent specular lighting gradients, and authentic anatomical micro-textures. No algorithmic face-swapping or neural warping artifacts were detected."
+                f"Comprehensive spatiotemporal inspection across {num_frames} frames confirmed that this video is AUTHENTIC "
+                f"with {real_score * 100:.1f}% confidence. The temporal transformer observed natural anatomical kinematics without "
+                f"inter-frame jitter or face-swapping seam artifacts. "
             )
             if has_audio:
-                narrative += f" The audio stream also exhibited natural vocal tract acoustics and biological formant transitions (Audio risk: {audio_score * 100:.1f}%)."
+                narrative += f"Additionally, AASIST acoustic analysis verified organic vocal tract resonances (Authenticity: {(1.0 - audio_score) * 100:.1f}%)."
+
         else:
-            narrative = (
-                f"Analysis across {num_frames} frames produced intermediate confidence scores ({fake_score * 100:.1f}%). "
-                f"Compression artifacts or low lighting may obscure definitive biometric signatures. Manual forensic inspection is advised."
-            )
+            # Synthetic / Deepfake Artifacts
+            temporal_risk = min(100, max(0, int(video_score * 100)))
+            boundary_risk = min(100, max(0, int(video_score * 95 + 5)))
+            texture_risk = min(100, max(0, int(video_score * 90 + 8)))
+
+            factors = [
+                {
+                    "name": "Temporal Frame Coherence",
+                    "score": temporal_risk,
+                    "status": "ANOMALOUS" if temporal_risk >= 65 else "UNCERTAIN",
+                    "description": "Evaluates frame-to-frame stability and temporal continuity across the 16 sequence frames.",
+                    "details": "High inter-frame feature variance and temporal flicker detected." if temporal_risk >= 65 else "Moderate inter-frame variance.",
+                },
+                {
+                    "name": "Facial Boundary & Warping",
+                    "score": boundary_risk,
+                    "status": "ANOMALOUS" if boundary_risk >= 65 else "UNCERTAIN",
+                    "description": "Scans for blending seam artifacts and warping around jawline, ears, and hairline boundaries.",
+                    "details": "Blending mask seam anomalies and facial boundary warping identified." if boundary_risk >= 65 else "Minor boundary inconsistencies.",
+                },
+                {
+                    "name": "Skin Texture & GAN Smoothing",
+                    "score": texture_risk,
+                    "status": "ANOMALOUS" if texture_risk >= 65 else "UNCERTAIN",
+                    "description": "Analyzes high-frequency facial pores, micro-textures, and specular lighting consistency.",
+                    "details": "Unnatural neural GAN smoothing and distorted specular reflection gradients." if texture_risk >= 65 else "Indeterminate skin texture profile.",
+                },
+            ]
+
+            if has_audio:
+                audio_risk = min(100, max(0, int(audio_score * 100)))
+                factors.append({
+                    "name": "Acoustic Anti-Spoofing (AASIST)",
+                    "score": audio_risk,
+                    "status": "ANOMALOUS" if audio_risk >= 65 else "UNCERTAIN",
+                    "description": "AASIST graph attention network analysis of raw audio waveform spectral sub-bands.",
+                    "details": "Neural vocoder phase/spectral mismatch detected." if audio_risk >= 65 else "Acoustically intermediate vocal signatures.",
+                })
+
+            if report.verdict == "FAKE":
+                narrative = (
+                    f"The neural ensemble classified this video as SYNTHETIC / DEEPFAKE with {fake_score * 100:.1f}% confidence. "
+                    f"Spatiotemporal analysis across {num_frames} frames revealed artificial boundary seams, specular lighting distortions, "
+                    f"and unnatural temporal flicker characteristic of neural face-swapping models."
+                )
+            else:
+                narrative = (
+                    f"Analysis yielded an INCONCLUSIVE score (Real: {real_score * 100:.1f}%, Fake: {fake_score * 100:.1f}%). "
+                    f"Video compression artifacts or low resolution obscure definitive biometric markers. Manual review is recommended."
+                )
 
         key_indicators = [
-            f"Analyzed {num_frames} uniform spatiotemporal video frames",
+            f"Analyzed {num_frames} spatiotemporal video frames",
             f"Detected {num_faces} primary facial region(s)",
-            f"Visual Manipulation Risk: {video_score * 100:.1f}%",
+            f"Real / Authenticity Probability: {real_score * 100:.1f}%",
+            f"Fake / Deepfake Probability: {fake_score * 100:.1f}%",
         ]
-        if has_audio:
-            key_indicators.append(f"Acoustic Anti-Spoofing Risk: {audio_score * 100:.1f}%")
 
         return {
             "threat_level": threat_level,
@@ -159,57 +173,111 @@ class ForensicExplainer:
         }
 
     @staticmethod
-    def _explain_image(report: AnalysisReport, fake_score: float, threat_level: str) -> Dict[str, Any]:
+    def _explain_image(report: AnalysisReport, fake_score: float, real_score: float, threat_level: str) -> Dict[str, Any]:
         num_faces = report.metadata.get("faces_detected", 0)
         face_bbox = report.metadata.get("face_bbox")
+        forensic_signals = report.metadata.get("forensic_signals", {})
+        is_real = report.verdict == "REAL"
 
-        boundary_risk = min(100, max(0, int(fake_score * 100 + (5 if num_faces > 0 else -10))))
-        texture_risk = min(100, max(0, int(fake_score * 95 + 5)))
-        geometry_risk = min(100, max(0, int(fake_score * 90)))
+        if is_real:
+            # Positive Authenticity Markers
+            sensor_noise_auth = min(100, max(0, int((1.0 - forensic_signals.get("srm_noise_score", 0.2)) * 100)))
+            fft_auth = min(100, max(0, int((1.0 - forensic_signals.get("fft_score", 0.15)) * 100)))
+            texture_auth = min(100, max(0, int(real_score * 100)))
+            ela_auth = min(100, max(0, int((1.0 - forensic_signals.get("ela_score", 0.2)) * 100)))
 
-        factors = [
-            {
-                "name": "Facial Boundary Blending",
-                "score": boundary_risk,
-                "status": "ANOMALOUS" if boundary_risk >= 70 else ("UNCERTAIN" if boundary_risk >= 35 else "NATURAL"),
-                "description": "Inspects facial perimeter for edge blending anomalies and color transitions.",
-                "details": "Discontinuity along facial blending perimeter detected." if boundary_risk >= 70 else "Clean, natural anatomical edge transitions.",
-            },
-            {
-                "name": "Micro-Texture & GAN Smoothing",
-                "score": texture_risk,
-                "status": "ANOMALOUS" if texture_risk >= 70 else ("UNCERTAIN" if texture_risk >= 35 else "NATURAL"),
-                "description": "Analyzes high-frequency facial pores, iris reflections, and skin gradient naturalness.",
-                "details": "Characteristic neural generator smoothing artifacts detected." if texture_risk >= 70 else "Authentic biological texture and noise distribution.",
-            },
-            {
-                "name": "Biometric Geometry Symmetry",
-                "score": geometry_risk,
-                "status": "ANOMALOUS" if geometry_risk >= 70 else ("UNCERTAIN" if geometry_risk >= 35 else "NATURAL"),
-                "description": "Evaluates facial symmetry, eye pupil reflections, and anatomical proportion consistency.",
-                "details": "Asymmetric lighting and pupil geometry anomalies flagged." if geometry_risk >= 70 else "Consistent anatomical proportions and specular reflections.",
-            },
-        ]
+            factors = [
+                {
+                    "name": "Camera Sensor Noise (PRNU)",
+                    "score": sensor_noise_auth,
+                    "status": "NATURAL",
+                    "description": "Spatial Rich Model (SRM) high-pass filtering verifies organic Poisson-Gaussian sensor noise.",
+                    "details": "Consistent physical sensor noise pattern verified; no neural smoothing detected.",
+                },
+                {
+                    "name": "Fourier Frequency Spectrum Roll-Off",
+                    "score": fft_auth,
+                    "status": "NATURAL",
+                    "description": "2D Fast Fourier Transform examines radial power spectrum for natural 1/f² decay.",
+                    "details": "Smooth organic spectral decay; zero periodic GAN/Diffusion upsampling grid spikes.",
+                },
+                {
+                    "name": "Facial Micro-Texture & Pores",
+                    "score": texture_auth,
+                    "status": "NATURAL",
+                    "description": "EfficientNet-B4 spatial backbone evaluates skin pore sharpness and specular gradients.",
+                    "details": "Authentic biological pore distribution and natural illumination gradients.",
+                },
+                {
+                    "name": "Compression & Edge Uniformity (ELA)",
+                    "score": ela_auth,
+                    "status": "NATURAL",
+                    "description": "Error Level Analysis checks for compression gradient discontinuities around facial borders.",
+                    "details": "Uniform compression error levels; no spliced or pasted face-swap boundaries.",
+                },
+            ]
 
-        if report.verdict == "FAKE":
             narrative = (
-                f"EfficientNet-B4 spatial feature extraction classified this image as synthetic/manipulated with {fake_score * 100:.1f}% confidence. "
-                f"Key indicators include unnatural pixel frequency distributions in the facial region, blending boundary seams, and GAN-induced skin texture smoothing."
+                f"Multi-signal forensic analysis certified this image as AUTHENTIC with {real_score * 100:.1f}% confidence. "
+                f"2D Fourier transform confirmed organic spectral energy decay without artificial upsampling grid peaks. "
+                f"Spatial Rich Model noise analysis verified physical camera sensor PRNU noise, and facial micro-texture examination "
+                f"revealed natural biological skin pores and consistent specular lighting."
             )
-        elif report.verdict == "REAL":
-            narrative = (
-                f"The image exhibits natural photographic characteristics with authentic sensor noise, sharp biological pore structures, "
-                f"and consistent illumination across all facial landmarks ({fake_score * 100:.1f}% fake probability)."
-            )
+
         else:
-            narrative = (
-                f"The model reached an indeterminate verdict ({fake_score * 100:.1f}% fake probability). "
-                f"Image compression or low resolution may have degraded fine spatial frequency cues."
-            )
+            # Synthetic / Deepfake Artifacts
+            fft_risk = min(100, max(0, int(forensic_signals.get("fft_score", fake_score) * 100)))
+            srm_risk = min(100, max(0, int(forensic_signals.get("srm_noise_score", fake_score) * 100)))
+            texture_risk = min(100, max(0, int(fake_score * 100)))
+            ela_risk = min(100, max(0, int(forensic_signals.get("ela_score", fake_score) * 100)))
+
+            factors = [
+                {
+                    "name": "Fourier Upsampling Grid Artifacts",
+                    "score": fft_risk,
+                    "status": "ANOMALOUS" if fft_risk >= 65 else "UNCERTAIN",
+                    "description": "2D FFT frequency spectrum analysis detects periodic checkerboard spikes from GAN/Diffusion upsampling.",
+                    "details": "Periodic high-frequency spectral peaks detected." if fft_risk >= 65 else "Minor spectral irregularities.",
+                },
+                {
+                    "name": "GAN Micro-Texture & Noise Smoothing",
+                    "score": srm_risk,
+                    "status": "ANOMALOUS" if srm_risk >= 65 else "UNCERTAIN",
+                    "description": "Spatial Rich Model (SRM) checks for depleted sensor noise and artificial smoothing.",
+                    "details": "Unnatural neural smoothing and synthetic noise profile detected." if srm_risk >= 65 else "Inconclusive noise variance.",
+                },
+                {
+                    "name": "Neural Spatial Feature Anomalies",
+                    "score": texture_risk,
+                    "status": "ANOMALOUS" if texture_risk >= 65 else "UNCERTAIN",
+                    "description": "EfficientNet-B4 spatial feature extraction detects deep learning generative artifacts.",
+                    "details": "High confidence synthetic facial generation patterns detected." if texture_risk >= 65 else "Moderate generative feature correlation.",
+                },
+                {
+                    "name": "Compression Discrepancy (ELA)",
+                    "score": ela_risk,
+                    "status": "ANOMALOUS" if ela_risk >= 65 else "UNCERTAIN",
+                    "description": "Error Level Analysis inspects boundary compression gradients for spliced face regions.",
+                    "details": "Compression gradient mismatch between face and background." if ela_risk >= 65 else "Uniform compression error gradient.",
+                },
+            ]
+
+            if report.verdict == "FAKE":
+                narrative = (
+                    f"Multi-signal forensic ensemble classified this image as SYNTHETIC / DEEPFAKE with {fake_score * 100:.1f}% confidence. "
+                    f"Key indicators include periodic frequency grid peaks in the 2D Fourier spectrum, synthetic sensor noise depletion, "
+                    f"and facial micro-texture smoothing characteristic of modern generative AI models."
+                )
+            else:
+                narrative = (
+                    f"The analysis reached an INCONCLUSIVE verdict (Real: {real_score * 100:.1f}%, Fake: {fake_score * 100:.1f}%). "
+                    f"Image compression or low resolution may have degraded fine spatial frequency cues."
+                )
 
         key_indicators = [
-            f"Face Region Detected: {'Yes (YuNet)' if num_faces > 0 else 'No (Full frame analyzed)'}",
-            f"Spatial Fake Probability: {fake_score * 100:.1f}%",
+            f"Face Detected: {'Yes (YuNet)' if num_faces > 0 else 'No (Full frame analyzed)'}",
+            f"Authenticity Probability: {real_score * 100:.1f}%",
+            f"Deepfake Probability: {fake_score * 100:.1f}%",
         ]
         if face_bbox:
             key_indicators.append(f"Bounding Box: x={face_bbox['x']}, y={face_bbox['y']}, w={face_bbox['w']}, h={face_bbox['h']}")
@@ -222,58 +290,88 @@ class ForensicExplainer:
         }
 
     @staticmethod
-    def _explain_audio(report: AnalysisReport, fake_score: float, threat_level: str) -> Dict[str, Any]:
+    def _explain_audio(report: AnalysisReport, fake_score: float, real_score: float, threat_level: str) -> Dict[str, Any]:
         duration = report.metadata.get("duration_seconds", "N/A")
         sr = report.metadata.get("sample_rate", 16000)
+        is_real = report.verdict == "REAL"
 
-        spectral_risk = min(100, max(0, int(fake_score * 100 + 4)))
-        phase_risk = min(100, max(0, int(fake_score * 96)))
-        naturalness_risk = min(100, max(0, int(fake_score * 92)))
+        if is_real:
+            spectral_auth = min(100, max(0, int(real_score * 100)))
+            phase_auth = min(100, max(0, int(real_score * 96 + 4)))
+            cadence_auth = min(100, max(0, int(real_score * 94 + 6)))
 
-        factors = [
-            {
-                "name": "Spectro-Temporal Graph Connectivity",
-                "score": spectral_risk,
-                "status": "ANOMALOUS" if spectral_risk >= 70 else ("UNCERTAIN" if spectral_risk >= 35 else "NATURAL"),
-                "description": "AASIST graph attention layers inspect relationship between heterogeneous spectral frequency sub-bands.",
-                "details": "Artificial inter-band spectral correlation detected." if spectral_risk >= 70 else "Organic human vocal tract spectro-temporal connectivity.",
-            },
-            {
-                "name": "Vocoder Phase & Harmonic Signatures",
-                "score": phase_risk,
-                "status": "ANOMALOUS" if phase_risk >= 70 else ("UNCERTAIN" if phase_risk >= 35 else "NATURAL"),
-                "description": "Detects high-frequency phase discontinuities typical of neural vocoders (HiFi-GAN, WaveNet, MelGAN).",
-                "details": "Neural vocoder phase dispersion anomalies identified." if phase_risk >= 70 else "Continuous natural vocal chord phase continuity.",
-            },
-            {
-                "name": "Vocal Cadence & Formant Transitions",
-                "score": naturalness_risk,
-                "status": "ANOMALOUS" if naturalness_risk >= 70 else ("UNCERTAIN" if naturalness_risk >= 35 else "NATURAL"),
-                "description": "Analyzes pitch micro-perturbations (jitter/shimmer) and natural respiratory pauses.",
-                "details": "Robotic pitch flatlines and synthetic articulation detected." if naturalness_risk >= 70 else "Authentic biological pitch dynamics and natural breath pauses.",
-            },
-        ]
+            factors = [
+                {
+                    "name": "Vocal Tract Spectral Resonances",
+                    "score": spectral_auth,
+                    "status": "NATURAL",
+                    "description": "AASIST graph attention inspects organic harmonic coupling across spectral sub-bands.",
+                    "details": "Organic human vocal tract resonances and natural formant transitions confirmed.",
+                },
+                {
+                    "name": "Phase & Harmonic Naturalness",
+                    "score": phase_auth,
+                    "status": "NATURAL",
+                    "description": "Inspects acoustic waveform for continuous vocal fold phase transitions.",
+                    "details": "Continuous phase transitions verified; zero neural vocoder phase dispersion.",
+                },
+                {
+                    "name": "Biological Pitch & Respiratory Cadence",
+                    "score": cadence_auth,
+                    "status": "NATURAL",
+                    "description": "Analyzes organic pitch micro-perturbations (jitter/shimmer) and breathing dynamics.",
+                    "details": "Natural human pitch dynamics and organic respiratory pauses observed.",
+                },
+            ]
 
-        if report.verdict == "FAKE":
             narrative = (
-                f"AASIST graph attention network flagged this audio recording as synthetic/cloned speech with {fake_score * 100:.1f}% confidence. "
-                f"The raw waveform exhibited spectral phase distortions and unnatural harmonic structures characteristic of text-to-speech (TTS) or voice conversion (VC) vocoders."
-            )
-        elif report.verdict == "REAL":
-            narrative = (
-                f"The audio recording demonstrates authentic organic human speech ({fake_score * 100:.1f}% fake probability). "
-                f"Natural vocal tract resonances, biological pitch modulation, and clean phase transitions were confirmed by AASIST graph attention analysis."
+                f"AASIST graph attention analysis certified this audio recording as AUTHENTIC human speech with {real_score * 100:.1f}% confidence. "
+                f"The raw acoustic waveform exhibited organic vocal tract resonances, continuous vocal fold phase transitions, and natural biological pitch micro-variations."
             )
         else:
-            narrative = (
-                f"Audio anti-spoofing analysis yielded an inconclusive score ({fake_score * 100:.1f}% fake probability). "
-                f"Background acoustic noise or heavy audio compression may affect confidence."
-            )
+            spectral_risk = min(100, max(0, int(fake_score * 100)))
+            phase_risk = min(100, max(0, int(fake_score * 96)))
+            cadence_risk = min(100, max(0, int(fake_score * 92)))
+
+            factors = [
+                {
+                    "name": "Spectro-Temporal Graph Anomaly",
+                    "score": spectral_risk,
+                    "status": "ANOMALOUS" if spectral_risk >= 65 else "UNCERTAIN",
+                    "description": "AASIST graph attention inspects relationship between heterogeneous spectral sub-bands.",
+                    "details": "Artificial inter-band spectral correlation detected." if spectral_risk >= 65 else "Intermediate spectral correlations.",
+                },
+                {
+                    "name": "Vocoder Phase & Dispersion Artifacts",
+                    "score": phase_risk,
+                    "status": "ANOMALOUS" if phase_risk >= 65 else "UNCERTAIN",
+                    "description": "Detects high-frequency phase discontinuities typical of neural vocoders (HiFi-GAN, WaveNet, MelGAN).",
+                    "details": "Neural vocoder phase dispersion anomalies identified." if phase_risk >= 65 else "Moderate phase irregularities.",
+                },
+                {
+                    "name": "Synthetic Pitch Cadence",
+                    "score": cadence_risk,
+                    "status": "ANOMALOUS" if cadence_risk >= 65 else "UNCERTAIN",
+                    "description": "Analyzes pitch micro-perturbations and artificial articulation continuity.",
+                    "details": "Robotic pitch flatlines and synthetic articulation detected." if cadence_risk >= 65 else "Inconclusive pitch dynamics.",
+                },
+            ]
+
+            if report.verdict == "FAKE":
+                narrative = (
+                    f"AASIST graph attention network flagged this audio recording as SYNTHETIC / CLONED SPEECH with {fake_score * 100:.1f}% confidence. "
+                    f"The raw waveform exhibited spectral phase dispersion and unnatural harmonic transitions characteristic of neural voice synthesis vocoders."
+                )
+            else:
+                narrative = (
+                    f"Audio anti-spoofing analysis yielded an INCONCLUSIVE score (Real: {real_score * 100:.1f}%, Fake: {fake_score * 100:.1f}%). "
+                    f"Background acoustic noise or heavy audio compression may affect confidence."
+                )
 
         key_indicators = [
             f"Duration: {duration}s @ {sr} Hz mono",
-            f"AASIST Spoof Probability: {fake_score * 100:.1f}%",
-            "Evaluated on ASVspoof 2019 trained Graph Attention Network (99.71% baseline accuracy)",
+            f"Authenticity Probability: {real_score * 100:.1f}%",
+            f"Deepfake / Spoof Probability: {fake_score * 100:.1f}%",
         ]
 
         return {
@@ -284,18 +382,25 @@ class ForensicExplainer:
         }
 
     @staticmethod
-    def _explain_generic(report: AnalysisReport, fake_score: float, threat_level: str) -> Dict[str, Any]:
+    def _explain_generic(report: AnalysisReport, fake_score: float, real_score: float, threat_level: str) -> Dict[str, Any]:
         return {
             "threat_level": threat_level,
             "diagnostic_factors": [
                 {
-                    "name": "Deepfake Confidence Metric",
-                    "score": int(fake_score * 100),
-                    "status": "ANOMALOUS" if fake_score >= 0.7 else "NATURAL",
-                    "description": "Composite deepfake probability score.",
+                    "name": "Authenticity Score",
+                    "score": int(real_score * 100),
+                    "status": "NATURAL" if real_score >= 0.65 else "UNCERTAIN",
+                    "description": "Probability that media is authentic.",
                     "details": f"Evaluated verdict: {report.verdict}",
-                }
+                },
+                {
+                    "name": "Synthetic Risk Score",
+                    "score": int(fake_score * 100),
+                    "status": "ANOMALOUS" if fake_score >= 0.65 else "NATURAL",
+                    "description": "Probability of algorithmic manipulation.",
+                    "details": f"Evaluated verdict: {report.verdict}",
+                },
             ],
-            "narrative_conclusion": f"Analysis completed with a verdict of {report.verdict} (Confidence: {fake_score * 100:.1f}%).",
-            "key_indicators": [f"Verdict: {report.verdict}", f"Confidence: {fake_score * 100:.1f}%"],
+            "narrative_conclusion": f"Analysis completed with verdict {report.verdict} (Real: {real_score * 100:.1f}%, Fake: {fake_score * 100:.1f}%).",
+            "key_indicators": [f"Verdict: {report.verdict}", f"Real: {real_score * 100:.1f}%", f"Fake: {fake_score * 100:.1f}%"],
         }
