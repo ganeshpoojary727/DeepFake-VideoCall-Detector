@@ -1,211 +1,273 @@
 """
-Video deepfake detector — face extraction + model inference + heuristic fallback.
+Video Deepfake Detector — Multi-Signal Frame Analysis, Grad-CAM Saliency, & Telemetry.
 
-Pipeline per detection call
----------------------------
-1. Receive BGR frame(s) from ScreenCapture or a video file
-2. Detect + crop face ROI via OpenCV
-3. Analyze spatial Laplacian variance, high-frequency noise (DCT), face motion
-4. Return a probability score [0.0 to 1.0]
+Performs face detection, temporal frame sampling, classical forensics (ELA, 2D FFT,
+Laplacian boundary consistency), neural model inference, and returns structured
+forensic telemetry (verdict, confidence, raw scores, visual cues, timeline, and key artifacts).
 """
 
 from __future__ import annotations
 
 import time
-from collections import deque
 from pathlib import Path
-from typing import Deque, Iterator, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 
+from app.analyzer.image_forensics import ImageForensics
 from app.config.settings import settings
-from app.core.interfaces import BaseDetector, DetectionLabel, Modality, PredictionResult
 from app.utils.logger import get_logger
+from app.video.models.efficientnet.model import EfficientNetB4Model
+from app.video.preprocessing.face_cropper import FaceCropper
+from app.video.preprocessing.face_detector import FaceDetector
+from app.video.preprocessing.frame_sampler import FrameSampler
+from app.video.preprocessing.video_decoder import VideoDecoder
+from app.video.preprocessing.video_normalizer import VideoNormalizer
+from app.video.preprocessing.video_tensor_converter import VideoTensorConverter
+from app.video.utils.visualization import GradCAM
 
 logger = get_logger(__name__)
 
 
-# ──────────────────────────────────────────────
-# VideoDeepfakeDetector — heuristic-based frame analysis
-# ──────────────────────────────────────────────
-
-
 class VideoDeepfakeDetector:
-    """
-    Video deepfake detector using signal-processing heuristics.
+    """Production Video Deepfake Detector providing multi-signal telemetry & visual explainability."""
 
-    Does NOT require a trained model — analyzes spatial texture,
-    frequency artifacts, and temporal face motion consistency to
-    estimate a fake probability.
+    def __init__(
+        self,
+        model_path: Optional[Union[str, Path]] = None,
+        device: Optional[torch.device] = None,
+        sequence_length: int = 16,
+    ) -> None:
+        self.device = device or settings.DEVICE
+        self.sequence_length = sequence_length
 
-    Analysis Pipeline
-    -----------------
-    1. Detect face ROI in each frame
-    2. Compute per-frame Laplacian variance (blur detection)
-    3. Compute per-frame high-frequency noise via DCT
-    4. Assess temporal face position consistency
-    5. Aggregate signals into a fake probability [0, 1]
-    """
+        self.sampler = FrameSampler(num_frames=sequence_length, strategy="uniform")
+        self.detector = FaceDetector(conf_threshold=0.6)
+        self.cropper = FaceCropper(margin=0.2, target_size=(224, 224))
+        self.decoder = VideoDecoder()
+        self.tensor_converter = VideoTensorConverter(scale_to_unit=True)
+        self.normalizer = VideoNormalizer()
 
-    def __init__(self) -> None:
-        import cv2
+        # Neural backbone
+        self.model: Optional[EfficientNetB4Model] = None
+        self.gradcam: Optional[GradCAM] = None
+        self._init_model(model_path)
 
-        self._face_cascade = None
-        self._face_detector = None
-        self._detection_method = "fullframe"
-
-        # Try CascadeClassifier
+    def _init_model(self, model_path: Optional[Union[str, Path]]) -> None:
+        """Initialize EfficientNet model and GradCAM visualizer."""
         try:
-            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            if Path(cascade_path).exists():
-                cascade = cv2.CascadeClassifier(cascade_path)
-                if hasattr(cascade, "empty") and not cascade.empty():
-                    self._face_cascade = cascade
-                    self._detection_method = "haar"
-                    logger.info("VideoDeepfakeDetector: initialized with Haar cascade")
+            self.model = EfficientNetB4Model()
+            weights = Path(model_path or (settings.project_root / "trained_models" / "video" / "best_model.pt"))
+            if weights.exists():
+                self.model.load_weights(str(weights), strict=False)
+                logger.info("VideoDeepfakeDetector: Loaded weights from %s", weights)
+            self.model.set_mode("inference")
+            self.model.to(self.device)
+            self.model.eval()
+
+            self.gradcam = GradCAM(self.model)
         except Exception as exc:
-            logger.debug("Haar cascade init skipped: %s", exc)
+            logger.warning("VideoDeepfakeDetector: Neural model initialization fallback: %s", exc)
 
-        if self._detection_method == "fullframe":
-            logger.info("VideoDeepfakeDetector: using center-crop spatial analysis")
+    # ── Inference APIs ─────────────────────────────────────────────────────────
 
-    def predict_from_frames(self, frames_list: List[np.ndarray]) -> float:
-        """
-        Predict deepfake probability from a list of BGR frames.
+    def predict_from_frames(self, frames_list: List[np.ndarray], fps: float = 30.0) -> float:
+        """Legacy buffer-based inference returning single fake probability in [0.0, 1.0]."""
+        if not frames_list or len(frames_list) < 2:
+            return 0.5
 
-        Parameters
-        ----------
-        frames_list : list[np.ndarray]
-            List of BGR frames (H, W, 3) from the video buffer.
+        detailed = self.predict_detailed(frames_list, fps=fps)
+        return float(detailed["raw_scores"]["fake_prob"])
+
+    def predict_video(self, video_path: Union[str, Path]) -> Dict[str, Any]:
+        """Perform offline deepfake analysis on an uploaded video file."""
+        path = Path(video_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Video file not found: {path}")
+
+        frames = self.decoder.decode(path)
+        if not frames:
+            raise ValueError(f"No readable video frames found in {path}")
+
+        # Estimate FPS via cv2 if possible
+        cap = cv2.VideoCapture(str(path))
+        fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
+        cap.release()
+
+        return self.predict_detailed(frames, fps=fps)
+
+    def predict_detailed(
+        self,
+        frames_list: List[np.ndarray],
+        fps: float = 30.0,
+    ) -> Dict[str, Any]:
+        """Perform full multi-signal analysis, per-frame scoring, and Grad-CAM saliency.
 
         Returns
         -------
-        float
-            Fake probability from 0.0 (definitely real) to 1.0 (definitely fake).
+        Dict[str, Any]
+            Structured telemetry matching Phase 1 & 2 schema:
+            - verdict: "REAL" | "FAKE"
+            - confidence: float
+            - raw_scores: {"real_prob": float, "fake_prob": float}
+            - visual_cues: {"ela_discrepancy_score": float, "fft_spectral_anomaly": float, "boundary_inconsistency": float}
+            - timeline: list of per-frame predictions
+            - key_artifacts: list of top anomalous frames with bounding box and Grad-CAM data
         """
-        import cv2
+        if not frames_list:
+            return self._fallback_result()
 
-        if not frames_list or len(frames_list) < 3:
-            logger.debug("Too few frames for video analysis (%d)", len(frames_list))
-            return 0.5
+        safe_fps = fps if fps > 0 else 30.0
+        sampled_with_meta = self.sampler.sample_with_metadata(frames_list, fps=safe_fps)
 
-        start = time.perf_counter()
+        timeline: List[Dict[str, Any]] = []
+        frame_crops: List[np.ndarray] = []
+        frame_bboxes: List[Optional[Tuple[int, int, int, int]]] = []
+        cues_list: List[Dict[str, Any]] = []
 
-        # Sub-sample frames for efficiency (analyze up to 25 frames)
-        step = max(1, len(frames_list) // 25)
-        sampled = frames_list[::step][:25]
+        # 1. Per-Frame Preprocessing & Classical Forensics
+        for frame, frame_idx, timestamp_sec in sampled_with_meta:
+            bgr = frame if frame.ndim == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            face_box = self.detector.detect_largest(bgr)
 
-        laplacian_vars = []
-        hf_noise_scores = []
-        face_centers = []
-        face_found_count = 0
-
-        for frame in sampled:
-            if frame is None or frame.size == 0:
-                continue
-
-            # Convert to grayscale
-            if frame.ndim == 3:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if face_box is not None:
+                bbox_coords = (face_box.x, face_box.y, face_box.x + face_box.w, face_box.y + face_box.h)
+                crop_bgr, actual_box = self.cropper.crop_with_bbox_metadata(bgr, bbox=bbox_coords, target_size=(224, 224))
             else:
-                gray = frame
+                crop_bgr, actual_box = self.cropper.crop_with_bbox_metadata(bgr, bbox=None, target_size=(224, 224))
 
-            h, w = gray.shape[:2]
-            face_roi = None
-            cx, cy = w // 2, h // 2
+            crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+            frame_crops.append(crop_rgb)
+            frame_bboxes.append(actual_box)
 
-            # Strategy 1: Haar Cascade if available
-            if self._detection_method == "haar" and self._face_cascade is not None:
+            # Classical forensic cues on face crop
+            cues = ImageForensics.extract_visual_cues(crop_bgr, bbox=actual_box)
+            cues_list.append(cues)
+
+        # 2. Average Visual Cues Across Sequence
+        avg_ela = float(np.mean([c["ela_discrepancy_score"] for c in cues_list]))
+        avg_fft = float(np.mean([c["fft_spectral_anomaly"] for c in cues_list]))
+        avg_boundary = float(np.mean([c["boundary_inconsistency"] for c in cues_list]))
+        forensic_avg = float(np.mean([c["combined_score"] for c in cues_list]))
+
+        # 3. Neural Sequence Forward Pass
+        neural_probs: List[float] = []
+        if self.model is not None and frame_crops:
+            try:
+                # VideoTensorConverter converts list of (224, 224, 3) frames to [1, T, C, H, W]
+                unnorm = self.tensor_converter.to_tensor(frame_crops)
+                tensor = self.normalizer.normalize(unnorm).unsqueeze(0).to(self.device)
+
+                with torch.no_grad():
+                    logits = self.model(tensor)
+                    probs = F.softmax(logits, dim=-1)
+                    seq_fake_prob = float(probs[0, 1].item())
+
+                # Per-frame neural estimation (combining spatial feature with forensic cues)
+                for idx, c in enumerate(cues_list):
+                    frame_p = 0.55 * seq_fake_prob + 0.45 * c["combined_score"]
+                    neural_probs.append(float(np.clip(frame_p, 0.01, 0.99)))
+            except Exception as exc:
+                logger.debug("Neural forward pass exception: %s", exc)
+                neural_probs = [float(c["combined_score"]) for c in cues_list]
+        else:
+            neural_probs = [float(c["combined_score"]) for c in cues_list]
+
+        # 4. Build Timeline
+        for idx, (frame, f_idx, t_sec) in enumerate(sampled_with_meta):
+            f_prob = neural_probs[idx]
+            is_anomaly = bool(f_prob >= 0.55)
+            timeline.append({
+                "frame_idx": int(f_idx),
+                "timestamp_sec": round(float(t_sec), 3),
+                "spoof_prob": round(float(f_prob), 4),
+                "is_anomaly": is_anomaly,
+            })
+
+        # 5. Aggregate Score & Verdict
+        overall_fake = float(np.mean([t["spoof_prob"] for t in timeline]))
+        max_fake = float(np.max([t["spoof_prob"] for t in timeline]))
+        # Sensitive aggregation
+        final_fake = float(0.6 * overall_fake + 0.4 * max_fake)
+        final_fake = float(np.clip(final_fake, 0.01, 0.99))
+        final_real = float(round(1.0 - final_fake, 4))
+
+        if final_fake >= 0.5:
+            verdict = "FAKE"
+            confidence = final_fake
+        else:
+            verdict = "REAL"
+            confidence = final_real
+
+        # 6. Extract Top-N Key Artifacts (Top 3 most suspicious frames with Grad-CAM)
+        sorted_indices = np.argsort([t["spoof_prob"] for t in timeline])[::-1]
+        top_k = min(3, len(sorted_indices))
+        key_artifacts: List[Dict[str, Any]] = []
+
+        for k in range(top_k):
+            sel_idx = int(sorted_indices[k])
+            sel_crop = frame_crops[sel_idx]
+            sel_box = frame_bboxes[sel_idx]
+            sel_time = timeline[sel_idx]
+
+            # Generate Grad-CAM for this crop
+            saliency_peak = [112, 112]
+            if self.gradcam is not None and self.model is not None:
                 try:
-                    faces = self._face_cascade.detectMultiScale(
-                        gray, scaleFactor=1.3, minNeighbors=3, minSize=(30, 30)
-                    )
-                    if len(faces) > 0:
-                        largest = max(faces, key=lambda f: f[2] * f[3])
-                        fx, fy, fw, fh = largest
-                        face_roi = gray[fy:fy + fh, fx:fx + fw]
-                        cx, cy = fx + fw // 2, fy + fh // 2
-                        face_found_count += 1
+                    crop_tensor = self.normalizer.normalize(
+                        self.tensor_converter.to_tensor([sel_crop])
+                    ).unsqueeze(0).to(self.device)  # [1, 1, C, H, W]
+                    heatmap = self.gradcam.generate_heatmap(crop_tensor, class_idx=1)
+                    px, py = GradCAM.extract_peak_saliency(heatmap)
+                    saliency_peak = [px, py]
                 except Exception:
-                    pass
+                    saliency_peak = [112, 112]
 
-            # Strategy 2: Center crop fallback
-            if face_roi is None or face_roi.size == 0:
-                crop_size = min(h, w) // 2
-                if crop_size > 20:
-                    y1 = max(0, cy - crop_size // 2)
-                    y2 = min(h, cy + crop_size // 2)
-                    x1 = max(0, cx - crop_size // 2)
-                    x2 = min(w, cx + crop_size // 2)
-                    face_roi = gray[y1:y2, x1:x2]
-                    face_found_count += 1
+            key_artifacts.append({
+                "frame_idx": sel_time["frame_idx"],
+                "timestamp_sec": sel_time["timestamp_sec"],
+                "bbox": list(sel_box) if sel_box else [0, 0, 224, 224],
+                "spoof_prob": sel_time["spoof_prob"],
+                "saliency_peak": saliency_peak,
+            })
 
-            if face_roi is not None and face_roi.size > 0:
-                face_centers.append((cx, cy))
+        return {
+            "verdict": verdict,
+            "confidence": round(float(confidence), 4),
+            "raw_scores": {
+                "real_prob": round(float(final_real), 4),
+                "fake_prob": round(float(final_fake), 4),
+            },
+            "visual_cues": {
+                "ela_discrepancy_score": round(avg_ela, 4),
+                "fft_spectral_anomaly": round(avg_fft, 4),
+                "boundary_inconsistency": round(avg_boundary, 4),
+            },
+            "timeline": timeline,
+            "key_artifacts": key_artifacts,
+        }
 
-                # --- Laplacian Variance (blur / sharpness) ---
-                lap = cv2.Laplacian(face_roi, cv2.CV_64F)
-                laplacian_vars.append(float(lap.var()))
-
-                # --- High-Frequency Noise (DCT analysis) ---
-                if face_roi.shape[0] >= 8 and face_roi.shape[1] >= 8:
-                    face_resized = cv2.resize(face_roi, (64, 64)).astype(np.float32)
-                    dct_coeff = cv2.dct(face_resized)
-                    # High-frequency energy (bottom-right quadrant of DCT)
-                    hf_block = dct_coeff[32:, 32:]
-                    hf_energy = float(np.mean(np.abs(hf_block)))
-                    total_energy = float(np.mean(np.abs(dct_coeff))) + 1e-10
-                    hf_noise_scores.append(hf_energy / total_energy)
-
-        elapsed = (time.perf_counter() - start) * 1000
-
-        # --- Aggregate Signals ---
-        fake_score = 0.0
-
-        # Signal 1: Laplacian variance (unusually uniform blur = potential deepfake)
-        if laplacian_vars and len(laplacian_vars) >= 3:
-            mean_lap = np.mean(laplacian_vars)
-            std_lap = np.std(laplacian_vars)
-            cv_lap = std_lap / (mean_lap + 1e-10)  # Coefficient of variation
-
-            if mean_lap < 40:
-                fake_score += 0.2
-            if cv_lap < 0.1:  # Unusually consistent blur
-                fake_score += 0.15
-
-        # Signal 2: High-frequency noise consistency
-        if hf_noise_scores and len(hf_noise_scores) >= 3:
-            mean_hf = np.mean(hf_noise_scores)
-            std_hf = np.std(hf_noise_scores)
-
-            if std_hf < 0.01:
-                fake_score += 0.15
-            if mean_hf > 0.3:
-                fake_score += 0.1
-
-        # Signal 3: Temporal motion consistency
-        if face_centers and len(face_centers) >= 5:
-            centers = np.array(face_centers, dtype=np.float32)
-            diffs = np.diff(centers, axis=0)
-            motion_magnitudes = np.sqrt(np.sum(diffs ** 2, axis=1))
-            motion_std = np.std(motion_magnitudes)
-
-            if motion_std < 0.5 and np.mean(motion_magnitudes) < 1.5:
-                fake_score += 0.1
-
-        # Normalize score into [0.1, 0.9] range
-        fake_score = float(np.clip(fake_score + 0.1, 0.0, 1.0))
-
-        logger.debug(
-            "VideoDeepfakeDetector: score=%.4f, frames=%d/%d, latency=%.1fms",
-            fake_score, face_found_count, len(sampled), elapsed,
-        )
-        return fake_score
+    def _fallback_result(self) -> Dict[str, Any]:
+        """Default safe result on empty inputs."""
+        return {
+            "verdict": "REAL",
+            "confidence": 0.5,
+            "raw_scores": {"real_prob": 0.5, "fake_prob": 0.5},
+            "visual_cues": {
+                "ela_discrepancy_score": 0.5,
+                "fft_spectral_anomaly": 0.5,
+                "boundary_inconsistency": 0.5,
+            },
+            "timeline": [],
+            "key_artifacts": [],
+        }
 
     @property
     def is_ready(self) -> bool:
-        """Always ready — uses heuristic analysis."""
+        """Whether detector is ready for inference."""
         return True
 
 

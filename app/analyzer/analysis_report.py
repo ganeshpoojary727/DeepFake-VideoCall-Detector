@@ -1,42 +1,90 @@
 """
-Unified analysis report for deepfake detection results with dual-sided Real/Fake confidence.
+Unified analysis report and Consolidated Forensic Report for multimodal deepfake detection.
 
-This module provides a single structured result type used by all analyzers
-(image, video, audio) for consistent output across the entire system.
+Provides:
+1. ConsolidatedForensicReport: Standardized Phase 3 multimodal diagnostic report schema.
+2. AnalysisReport: Unified per-analyzer report with bidirectional conversion helpers.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
+
+
+@dataclass
+class ConsolidatedForensicReport:
+    """Consolidated Multimodal Forensic Report schema for Phase 3 offline file analysis.
+
+    Attributes
+    ----------
+    media_type : str
+        "AUDIO" | "IMAGE" | "VIDEO" | "MULTIMODAL"
+    verdict : str
+        "REAL" | "FAKE"
+    overall_confidence : float
+        Calibrated decision confidence in [0.0, 1.0].
+    modality_breakdown : dict
+        {
+            "audio": Optional[Dict[str, Any]],
+            "visual": Optional[Dict[str, Any]],
+            "classical_forensics": Optional[Dict[str, Any]]
+        }
+    temporal_sync : list of dict
+        Aligned second-by-second timestamps mapping audio vs. visual spoof probabilities.
+    top_anomalies : list of dict
+        Prioritized list of time segments / frames with highest manipulation evidence.
+    processing_time_ms : float
+        End-to-end inference and fusion latency.
+    metadata : dict
+        Additional metadata (file name, duration, models used, etc.).
+    """
+
+    media_type: str
+    verdict: str
+    overall_confidence: float
+    modality_breakdown: Dict[str, Optional[Dict[str, Any]]] = field(default_factory=dict)
+    temporal_sync: List[Dict[str, Any]] = field(default_factory=list)
+    top_anomalies: List[Dict[str, Any]] = field(default_factory=list)
+    natural_language_report: Optional[Dict[str, Any]] = None
+    processing_time_ms: float = 0.0
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert report to standardized JSON-serializable dictionary."""
+        return {
+            "media_type": self.media_type,
+            "verdict": self.verdict,
+            "overall_confidence": round(float(self.overall_confidence), 4),
+            "modality_breakdown": self.modality_breakdown,
+            "temporal_sync": self.temporal_sync,
+            "top_anomalies": self.top_anomalies,
+            "natural_language_report": self.natural_language_report,
+            "processing_time_ms": round(float(self.processing_time_ms), 1),
+            "metadata": self.metadata,
+        }
+
+    @property
+    def is_fake(self) -> bool:
+        return self.verdict == "FAKE"
+
+    @property
+    def is_real(self) -> bool:
+        return self.verdict == "REAL"
+
+    @property
+    def summary(self) -> str:
+        """One-line human-readable summary."""
+        return (
+            f"ConsolidatedForensicReport: Verdict={self.verdict} ({self.overall_confidence*100:.1f}%) | "
+            f"Type={self.media_type} | Anomalies={len(self.top_anomalies)} | "
+            f"Time={self.processing_time_ms:.1f}ms"
+        )
 
 
 @dataclass
 class AnalysisReport:
-    """Unified result returned by any media analyzer.
-
-    Attributes
-    ----------
-    verdict : str
-        Three-way classification: ``"REAL"``, ``"FAKE"``, or ``"UNCERTAIN"``.
-    confidence : float
-        Confidence associated with the verdict, in ``[0.0, 1.0]``.
-    media_type : str
-        Type of media analyzed: ``"image"``, ``"video"``, or ``"audio"``.
-    real_confidence : float
-        Calibrated probability that the media is authentic/real, in ``[0.0, 1.0]``.
-    fake_confidence : float
-        Calibrated probability that the media is synthetic/fake, in ``[0.0, 1.0]``.
-    scores : dict
-        Per-modality fake probabilities, e.g.
-        ``{"audio": 0.12, "video": 0.87, "fused": 0.57}``.
-        Missing modalities are ``None``.
-    processing_time_ms : float
-        Total wall-clock analysis time in milliseconds.
-    metadata : dict
-        Additional information: faces detected, frames analyzed,
-        forensic metrics, model versions, errors, etc.
-    """
+    """Unified result returned by media analyzers with dual-sided confidence."""
 
     verdict: str
     confidence: float
@@ -48,7 +96,6 @@ class AnalysisReport:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # Automatically sync real_confidence and fake_confidence if default
         if self.real_confidence == 0.5 and self.fake_confidence == 0.5:
             if self.verdict == "REAL":
                 self.real_confidence = self.confidence
@@ -60,27 +107,21 @@ class AnalysisReport:
                 self.fake_confidence = self.confidence
                 self.real_confidence = round(1.0 - self.confidence, 4)
 
-    # ── Serialisation ─────────────────────────
-
     def to_dict(self) -> Dict[str, Any]:
-        """Convert the report to a plain dictionary."""
+        """Convert report to plain dictionary."""
         return {
             "verdict": self.verdict,
             "confidence": round(self.confidence, 4),
             "real_confidence": round(self.real_confidence, 4),
             "fake_confidence": round(self.fake_confidence, 4),
             "media_type": self.media_type,
-            "scores": {k: round(v, 4) if v is not None else None
-                       for k, v in self.scores.items()},
+            "scores": {k: round(v, 4) if v is not None else None for k, v in self.scores.items()},
             "processing_time_ms": round(self.processing_time_ms, 1),
             "metadata": self.metadata,
         }
 
-    # ── Display helpers ───────────────────────
-
     @property
     def summary(self) -> str:
-        """One-line human-readable summary."""
         scores_str = ", ".join(
             f"{k}={v:.4f}" for k, v in self.scores.items() if v is not None
         )
@@ -92,10 +133,8 @@ class AnalysisReport:
 
     @property
     def is_fake(self) -> bool:
-        """Convenience flag."""
         return self.verdict == "FAKE"
 
     @property
     def is_real(self) -> bool:
-        """Convenience flag."""
         return self.verdict == "REAL"

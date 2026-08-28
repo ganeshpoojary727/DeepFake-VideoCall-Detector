@@ -35,14 +35,15 @@ class VideoDecoder:
                 return [arr]
             else:
                 raise PreprocessingError(f"Invalid video array shape {arr.shape}")
-        elif isinstance(video_path_or_bytes, str):
-            if not os.path.exists(video_path_or_bytes):
-                raise PreprocessingError(f"Video file not found: {video_path_or_bytes}")
+        elif isinstance(video_path_or_bytes, (str, os.PathLike)):
+            path_str = str(video_path_or_bytes)
+            if not os.path.exists(path_str):
+                raise PreprocessingError(f"Video file not found: {path_str}")
 
             import cv2
             frames: List[np.ndarray] = []
             try:
-                cap = cv2.VideoCapture(video_path_or_bytes)
+                cap = cv2.VideoCapture(path_str)
                 if cap.isOpened():
                     while True:
                         ret, frame = cap.read()
