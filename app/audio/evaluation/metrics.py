@@ -2,7 +2,7 @@
 Evaluation metrics calculation module for audio deepfake classification.
 
 Provides the MetricsCalculator class for computing Accuracy, Precision, Recall,
-F1-Score, Confusion Matrix, Equal Error Rate (EER), and minDCF.
+F1-Score, Confusion Matrix, Equal Error Rate (EER), and min t-DCF / minDCF.
 """
 
 from __future__ import annotations
@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
-from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_fscore_support, roc_curve
+from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_fscore_support
 
+from app.audio.evaluation.eer import compute_eer_from_labels, compute_min_dcf
 from app.audio.utils.logger import AudioLogger
 
 logger = AudioLogger.get("evaluation.metrics")
@@ -39,15 +40,7 @@ class MetricsCalculator:
         Tuple[float, float]
             (eer, eer_threshold) tuple.
         """
-        fpr, tpr, thresholds = roc_curve(y_true, y_scores, pos_label=1)
-        fnr = 1.0 - tpr
-
-        # Find threshold index where FPR and FNR cross
-        idx = np.nanargmin(np.abs(fpr - fnr))
-        eer = float((fpr[idx] + fnr[idx]) / 2.0)
-        threshold = float(thresholds[idx])
-
-        return eer, threshold
+        return compute_eer_from_labels(y_true, y_scores)
 
     @staticmethod
     def compute_min_dcf(
@@ -74,17 +67,13 @@ class MetricsCalculator:
         float
             Normalized minDCF value.
         """
-        fpr, tpr, _ = roc_curve(y_true, y_scores, pos_label=1)
-        fnr = 1.0 - tpr
-
-        dcf = c_miss * fnr * p_target + c_fa * fpr * (1.0 - p_target)
-        c_default = min(c_miss * p_target, c_fa * (1.0 - p_target))
-
-        if c_default == 0:
-            return 0.0
-
-        min_dcf = float(np.min(dcf) / c_default)
-        return min_dcf
+        return compute_min_dcf(
+            y_true=y_true,
+            y_scores=y_scores,
+            p_target=p_target,
+            c_miss=c_miss,
+            c_fa=c_fa,
+        )
 
     def compute_all(
         self,
@@ -130,6 +119,7 @@ class MetricsCalculator:
                 results["eer"] = round(eer, 4)
                 results["eer_threshold"] = round(threshold, 4)
                 results["min_dcf"] = round(min_dcf, 4)
+                results["min_tdcf"] = round(min_dcf, 4)
             except Exception as err:
                 logger.warning("Could not calculate EER/minDCF: %s", err)
                 results["eer"] = 0.0

@@ -163,3 +163,7 @@ class Evaluator:
         logger.info("F1 Score:  %.4f", f1)
 
         return result
+
+
+# Alias for backward compatibility
+AudioEvaluator = Evaluator

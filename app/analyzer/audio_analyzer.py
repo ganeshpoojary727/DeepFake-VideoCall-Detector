@@ -2,97 +2,126 @@
 Audio deepfake analyzer — wraps the trained AASIST model for file-based detection.
 
 Supports: .wav, .mp3, .flac, .ogg, .m4a, .aac, .wma
+Provides rich diagnostic telemetry including temporal timeline and spectral forensics.
 """
 
 from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
 from app.analyzer.analysis_report import AnalysisReport
 from app.audio.inference.voice_detector import VoiceDetector
+from app.audio.preprocessing.audio_loader import AudioLoader
 from app.config.settings import settings
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Thresholds for three-way decision
-_THRESHOLD_FAKE = 0.65
-_THRESHOLD_REAL = 0.35
+# Decision thresholds
+_THRESHOLD_FAKE = 0.60
+_THRESHOLD_REAL = 0.40
 
 
 class AudioAnalyzer:
-    """Audio deepfake analyzer using the AASIST model.
+    """Audio deepfake analyzer using the AASIST architecture.
 
-    Wraps the trained AASIST model for file-based audio deepfake detection.
-    Loads the best checkpoint from ``trained_models/audio/best_model.pt``.
+    Wraps the trained AASIST model for offline file-based audio deepfake detection,
+    producing calibrated probabilities, timeline telemetry, and spectral cues.
     """
 
     def __init__(self, device: Optional[torch.device] = None) -> None:
         self.device = device or settings.DEVICE
         self.target_sr: int = settings.audio.sample_rate  # 16000
+        self.loader = AudioLoader(target_sr=self.target_sr)
 
         model_path = settings.project_root / "trained_models" / "audio" / "best_model.pt"
-        logger.info("AudioAnalyzer: loading AASIST from %s", model_path)
+        logger.info("AudioAnalyzer: Initializing VoiceDetector with model path '%s'", model_path)
         self._detector = VoiceDetector(model_path=str(model_path), device=self.device)
 
-    # ── Public API ────────────────────────────
+    # ── Public Analysis APIs ───────────────────────────────────────────────────
 
-    def analyze(self, file_path: str | Path) -> AnalysisReport:
-        """Analyze an audio file for deepfake content."""
+    def analyze_structured(self, file_path: Union[str, Path]) -> Dict[str, Any]:
+        """Perform offline analysis on an uploaded file and return the exact structured schema.
+
+        Returns
+        -------
+        Dict[str, Any]
+            {
+                "verdict": "REAL" | "FAKE",
+                "confidence": float,
+                "raw_scores": {
+                    "bonafide_prob": float,
+                    "spoof_prob": float
+                },
+                "spectral_cues": {
+                    "peak_artifact_ranges": list,
+                    "spectral_rolloff_hz": float,
+                    "high_freq_energy_ratio": float,
+                    "spectral_flatness": float,
+                    "artifacts_detected": list
+                },
+                "timeline": list[dict]
+            }
+        """
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Audio file not found: {path}")
+
+        return self._detector.predict_file(path)
+
+    def analyze(self, file_path: Union[str, Path]) -> AnalysisReport:
+        """Analyze an audio file for deepfake content and return a unified AnalysisReport."""
         start = time.perf_counter()
-        file_path = Path(file_path)
+        path = Path(file_path)
 
         try:
-            audio, sr = self._load_audio(file_path)
+            structured_res = self.analyze_structured(path)
 
-            if sr != self.target_sr:
-                audio = self._resample(audio, sr, self.target_sr)
-
-            spoof_prob = float(self._detector.predict_buffer(audio))
-            spoof_prob = float(np.clip(spoof_prob, 0.01, 0.99))
-            real_prob = float(round(1.0 - spoof_prob, 4))
-
-            if spoof_prob >= _THRESHOLD_FAKE:
-                verdict = "FAKE"
-                verdict_confidence = spoof_prob
-            elif spoof_prob <= _THRESHOLD_REAL:
-                verdict = "REAL"
-                verdict_confidence = real_prob
-            else:
-                verdict = "UNCERTAIN"
-                verdict_confidence = max(real_prob, spoof_prob)
+            verdict = structured_res["verdict"]
+            confidence = structured_res["confidence"]
+            raw_scores = structured_res["raw_scores"]
+            spoof_prob = raw_scores["spoof_prob"]
+            real_prob = raw_scores["bonafide_prob"]
+            spectral_cues = structured_res["spectral_cues"]
+            timeline = structured_res["timeline"]
 
             elapsed = (time.perf_counter() - start) * 1000.0
 
             logger.info(
                 "AudioAnalyzer: %s → %s (Real=%.2f%%, Fake=%.2f%%, %.1fms)",
-                file_path.name, verdict, real_prob * 100, spoof_prob * 100, elapsed,
+                path.name, verdict, real_prob * 100, spoof_prob * 100, elapsed,
             )
+
+            # Metadata enriched with structured forensic fields
+            metadata: Dict[str, Any] = {
+                "file_name": path.name,
+                "sample_rate": self.target_sr,
+                "model": "AASIST (Graph Attention Network)",
+                "raw_scores": raw_scores,
+                "spectral_cues": spectral_cues,
+                "timeline": timeline,
+                "num_chunks_analyzed": len(timeline),
+            }
 
             return AnalysisReport(
                 verdict=verdict,
-                confidence=round(verdict_confidence, 4),
+                confidence=round(confidence, 4),
                 media_type="audio",
                 real_confidence=round(real_prob, 4),
                 fake_confidence=round(spoof_prob, 4),
                 scores={"audio": round(spoof_prob, 4)},
                 processing_time_ms=round(elapsed, 1),
-                metadata={
-                    "file_name": file_path.name,
-                    "sample_rate": self.target_sr,
-                    "duration_seconds": round(len(audio) / self.target_sr, 2),
-                    "model": "AASIST (Graph Attention Network)",
-                },
+                metadata=metadata,
             )
 
         except Exception as exc:
             elapsed = (time.perf_counter() - start) * 1000.0
-            logger.exception("AudioAnalyzer: failed on %s: %s", file_path, exc)
+            logger.exception("AudioAnalyzer: Failed on %s: %s", path, exc)
             return AnalysisReport(
                 verdict="UNCERTAIN",
                 confidence=0.5,
@@ -101,53 +130,20 @@ class AudioAnalyzer:
                 fake_confidence=0.5,
                 scores={"audio": None},
                 processing_time_ms=round(elapsed, 1),
-                metadata={"error": str(exc), "file_name": file_path.name},
+                metadata={
+                    "error": str(exc),
+                    "file_name": path.name,
+                    "raw_scores": {"bonafide_prob": 0.5, "spoof_prob": 0.5},
+                    "spectral_cues": {"peak_artifact_ranges": [], "artifacts_detected": []},
+                    "timeline": [],
+                },
             )
 
     def analyze_buffer(self, audio: np.ndarray, sr: int = 16000) -> float:
-        """Return spoof probability from a raw numpy buffer."""
-        if sr != self.target_sr:
-            audio = self._resample(audio, sr, self.target_sr)
+        """Return spoof probability from a raw numpy audio buffer."""
         return float(self._detector.predict_buffer(audio))
-
-    # ── Private helpers ───────────────────────
-
-    def _load_audio(self, file_path: Path) -> Tuple[np.ndarray, int]:
-        """Load audio with soundfile (primary) / librosa (fallback)."""
-        try:
-            import soundfile as sf
-            audio, sr = sf.read(str(file_path), dtype="float32")
-        except Exception:
-            import librosa
-            logger.debug("soundfile failed, falling back to librosa")
-            audio, sr = librosa.load(str(file_path), sr=None, mono=True)
-            return audio.astype(np.float32), int(sr)
-
-        # Stereo → mono
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-
-        # Peak-normalise to [-1, 1]
-        peak = np.abs(audio).max()
-        if peak > 0:
-            audio = audio / peak
-
-        return audio.astype(np.float32), int(sr)
-
-    @staticmethod
-    def _resample(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
-        if orig_sr == target_sr:
-            return audio
-        try:
-            import librosa
-            return librosa.resample(audio, orig_sr=orig_sr, target_sr=target_sr)
-        except ImportError:
-            duration = len(audio) / orig_sr
-            target_len = int(duration * target_sr)
-            indices = np.linspace(0, len(audio) - 1, target_len)
-            return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
 
     @property
     def is_ready(self) -> bool:
-        """Whether the AASIST model has been loaded."""
+        """Whether the AASIST model has been successfully initialized/loaded."""
         return getattr(self._detector, "_model_loaded", False)

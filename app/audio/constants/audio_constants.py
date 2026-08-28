@@ -59,3 +59,14 @@ SUPPORTED_AUDIO_DATASETS: Tuple[str, ...] = (
 
 # Target Production Model
 PRODUCTION_AUDIO_MODEL: str = "aasist"
+
+# ASVspoof Standard Labels
+LABEL_BONAFIDE: int = 0
+LABEL_SPOOF: int = 1
+LABEL_BONAFIDE_STR: str = "bonafide"
+LABEL_SPOOF_STR: str = "spoof"
+
+# Biometric & minDCF Parameter Defaults
+DEFAULT_MIN_DCF_P_TARGET: float = 0.05
+DEFAULT_MIN_DCF_C_MISS: float = 1.0
+DEFAULT_MIN_DCF_C_FA: float = 1.0
