@@ -55,10 +55,10 @@ export default function CustomCursor() {
   if (!isVisible) return null;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden">
-      {/* Outer Glowing Trailing Ring / Spotlight */}
+    <div className="pointer-events-none fixed inset-0 z-[60] overflow-hidden">
+      {/* Outer Glowing Trailing Ring */}
       <motion.div
-        className="absolute rounded-full border border-sky-400/40 bg-sky-500/10 backdrop-blur-[1px]"
+        className="absolute rounded-full border border-[#38bdf8]/30 bg-[#38bdf8]/5 backdrop-blur-[1px]"
         style={{
           x: trailingX,
           y: trailingY,
@@ -68,17 +68,17 @@ export default function CustomCursor() {
         animate={{
           width: isHovered ? 64 : isClicking ? 28 : 40,
           height: isHovered ? 64 : isClicking ? 28 : 40,
-          borderColor: isHovered ? "rgba(56, 189, 248, 0.9)" : "rgba(56, 189, 248, 0.4)",
+          borderColor: isHovered ? "rgba(56, 189, 248, 0.8)" : "rgba(56, 189, 248, 0.3)",
           boxShadow: isHovered
-            ? "0 0 35px rgba(56, 189, 248, 0.5), inset 0 0 15px rgba(56, 189, 248, 0.3)"
-            : "0 0 15px rgba(56, 189, 248, 0.2)",
+            ? "0 0 35px rgba(56, 189, 248, 0.4), inset 0 0 15px rgba(56, 189, 248, 0.2)"
+            : "0 0 15px rgba(56, 189, 248, 0.15)",
         }}
         transition={{ type: "spring", stiffness: 350, damping: 25 }}
       />
 
       {/* Inner Precision Neon Dot */}
       <motion.div
-        className="absolute rounded-full bg-sky-400 shadow-[0_0_12px_#38bdf8]"
+        className="absolute rounded-full bg-[#38bdf8] shadow-[0_0_12px_#38bdf8]"
         style={{
           x: smoothX,
           y: smoothY,
@@ -87,7 +87,7 @@ export default function CustomCursor() {
         }}
         animate={{
           scale: isClicking ? 0.6 : isHovered ? 1.6 : 1,
-          backgroundColor: isHovered ? "#38bdf8" : "#ffffff",
+          backgroundColor: isHovered ? "#38bdf8" : "#e8eaed",
         }}
         transition={{ duration: 0.15 }}
       >
