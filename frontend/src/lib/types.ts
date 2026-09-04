@@ -93,8 +93,9 @@ export interface ModalityBreakdown {
 
 export interface ConsolidatedForensicReport {
   media_type: "AUDIO" | "IMAGE" | "VIDEO" | "MULTIMODAL" | string;
-  verdict: "REAL" | "FAKE" | "UNCERTAIN";
+  verdict: "REAL" | "FAKE" | "UNCERTAIN" | "NOT_APPLICABLE";
   overall_confidence: number; // 0.0 to 1.0
+  content_category?: string | null;  // Set for NOT_APPLICABLE (e.g. "DIGITAL_ART_ANIME")
   modality_breakdown: ModalityBreakdown;
   temporal_sync: TemporalSyncItem[];
   top_anomalies: TopAnomaly[];
@@ -128,11 +129,12 @@ export interface ForensicReport {
 }
 
 export interface AnalysisReport {
-  verdict: "REAL" | "FAKE" | "UNCERTAIN";
+  verdict: "REAL" | "FAKE" | "UNCERTAIN" | "NOT_APPLICABLE";
   confidence: number;
   real_confidence: number;
   fake_confidence: number;
   media_type: "image" | "video" | "audio" | "unknown";
+  content_category?: string | null;  // Set for NOT_APPLICABLE verdicts
   scores: {
     video?: number | null;
     audio?: number | null;

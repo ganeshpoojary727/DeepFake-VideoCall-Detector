@@ -20,6 +20,7 @@ import EvidenceMatrix from "../../../components/EvidenceMatrix";
 import ForensicNarrative from "../../../components/ForensicNarrative";
 import Footer from "../../../components/Footer";
 import { ScanSession, ConsolidatedForensicReport } from "../../../lib/types";
+import { getScanFile } from "../../../lib/fileStorage";
 
 interface ReportPageProps {
   params: Promise<{ scanId: string }>;
@@ -44,23 +45,29 @@ export default function ReportPage({ params }: ReportPageProps) {
       }
     }
 
-    // Reconstruct File from stored base64
-    const fileRaw = sessionStorage.getItem(`scan_file_${scanId}`);
-    if (fileRaw) {
-      try {
-        const fileData = JSON.parse(fileRaw);
-        fetch(fileData.data)
-          .then((res) => res.blob())
-          .then((blob) => {
-            const reconstructedFile = new File([blob], fileData.name, {
-              type: fileData.type,
-            });
-            setFile(reconstructedFile);
-          });
-      } catch {
-        // File reconstruction failed
+    // Retrieve File from IndexedDB (fallback to legacy sessionStorage)
+    getScanFile(scanId).then((storedFile) => {
+      if (storedFile) {
+        setFile(storedFile);
+      } else {
+        const fileRaw = sessionStorage.getItem(`scan_file_${scanId}`);
+        if (fileRaw) {
+          try {
+            const fileData = JSON.parse(fileRaw);
+            fetch(fileData.data)
+              .then((res) => res.blob())
+              .then((blob) => {
+                const reconstructedFile = new File([blob], fileData.name, {
+                  type: fileData.type,
+                });
+                setFile(reconstructedFile);
+              });
+          } catch {
+            // File reconstruction failed
+          }
+        }
       }
-    }
+    });
   }, [scanId]);
 
   const report: ConsolidatedForensicReport | null = session?.report ?? null;
@@ -253,6 +260,7 @@ ${nl?.forensic_recommendations?.map((r: string) => "- " + r).join("\n") || "N/A"
           confidence={report.overall_confidence}
           mediaType={report.media_type}
           processingTimeMs={report.processing_time_ms}
+          contentCategory={report.content_category}
         />
 
         {/* ═══════════════════════════════════════════════════════════

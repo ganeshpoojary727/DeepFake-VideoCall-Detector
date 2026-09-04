@@ -28,8 +28,9 @@ from app.video.inference.video_detector import VideoDetector
 
 logger = get_logger(__name__)
 
-_THRESHOLD_FAKE = 0.60
-_THRESHOLD_REAL = 0.40
+_THRESHOLD_FAKE = 0.70   # Confidence must be ≥70% to call FAKE
+_THRESHOLD_REAL = 0.30   # Confidence must be ≤30% fake to call REAL
+                         # 31–69% → UNCERTAIN (never flag a coin-flip as deepfake)
 
 
 class VideoAnalyzer:
@@ -117,11 +118,14 @@ class VideoAnalyzer:
         final_fake_prob = float(np.clip(final_fake_prob, 0.01, 0.99))
         final_real_prob = float(round(1.0 - final_fake_prob, 4))
 
-        # 4. Verdict determination
+        # 4. Calibrated Verdict Determination
+        # FAKE  → fake_prob ≥ 0.70  (definitive manipulation evidence)
+        # REAL  → fake_prob ≤ 0.30  (definitive authenticity)
+        # UNCERTAIN → 0.31–0.69   (coin-flip zone; never escalate)
         if final_fake_prob >= _THRESHOLD_FAKE:
             verdict = "FAKE"
             confidence = final_fake_prob
-        elif final_real_prob >= (1.0 - _THRESHOLD_REAL):
+        elif final_fake_prob <= _THRESHOLD_REAL:
             verdict = "REAL"
             confidence = final_real_prob
         else:

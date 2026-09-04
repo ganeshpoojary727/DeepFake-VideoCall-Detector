@@ -90,6 +90,50 @@ class DeterministicExplainerProvider(BaseExplainerProvider):
         conf_pct = f"{confidence * 100:.1f}%"
         is_fake = verdict == "FAKE"
 
+        # ── NOT_APPLICABLE: Stage-0 identified non-biometric artwork ──────────
+        if verdict == "NOT_APPLICABLE":
+            meta = report.metadata or {}
+            content_cls = meta.get("content_classification") or {}
+            category = content_cls.get("category", "NON_BIOMETRIC_CONTENT")
+            reason = content_cls.get(
+                "reason",
+                "The uploaded media is non-photorealistic digital artwork.",
+            )
+            _CATEGORY_LABELS = {
+                "DIGITAL_ART_ANIME": "digital illustration / anime artwork",
+                "SCENERY_OBJECT": "scenery, wallpaper, or inanimate object",
+            }
+            category_label = _CATEGORY_LABELS.get(category, "non-photorealistic artwork")
+            return NaturalLanguageReport(
+                executive_summary=(
+                    f"Deepfake biometric analysis is NOT APPLICABLE to this {media_type.lower()} file. "
+                    f"The Stage-0 Content Pre-Classifier identified the media as {category_label} "
+                    f"with {conf_pct} confidence. Forensic deepfake detection is designed exclusively "
+                    f"for photorealistic images and videos of real human subjects."
+                ),
+                visual_analysis_narrative=(
+                    f"Content classification signal: {reason} "
+                    f"The system detected characteristics consistent with {category_label}, including "
+                    f"flat color regions, hard line-art contours, low PRNU sensor noise, and/or "
+                    f"a quantized color palette — fingerprints of digital rendering tools "
+                    f"(e.g. Photoshop, Clip Studio, Blender) rather than camera sensors. "
+                    f"Running biometric CNN models on this content would produce meaningless outputs."
+                ),
+                audio_analysis_narrative=(
+                    "No audio analysis was performed; this media does not contain a biometric audio track."
+                ),
+                temporal_inconsistency_notes=(
+                    "Temporal frame analysis was bypassed. Deepfake temporal inconsistency detection "
+                    "requires a continuous video sequence of a real human subject."
+                ),
+                forensic_recommendations=[
+                    f"No action required. This {category_label} is correctly excluded from deepfake analysis.",
+                    "If you intended to analyze a photograph of a real person, please upload a photorealistic image.",
+                    "Deepfake forensics apply only to photographic or video recordings of human subjects.",
+                ],
+                provider_used="deterministic_rules",
+            )
+
         modality = report.modality_breakdown or {}
         audio = modality.get("audio") or {}
         visual = modality.get("visual") or {}

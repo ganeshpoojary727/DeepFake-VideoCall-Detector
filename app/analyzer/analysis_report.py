@@ -86,13 +86,14 @@ class ConsolidatedForensicReport:
 class AnalysisReport:
     """Unified result returned by media analyzers with dual-sided confidence."""
 
-    verdict: str
+    verdict: str                               # "REAL" | "FAKE" | "UNCERTAIN" | "NOT_APPLICABLE"
     confidence: float
     media_type: str
     real_confidence: float = 0.5
     fake_confidence: float = 0.5
     scores: Dict[str, Optional[float]] = field(default_factory=dict)
     processing_time_ms: float = 0.0
+    content_category: Optional[str] = None    # Set for NOT_APPLICABLE verdicts (e.g. "DIGITAL_ART_ANIME")
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -115,6 +116,7 @@ class AnalysisReport:
             "real_confidence": round(self.real_confidence, 4),
             "fake_confidence": round(self.fake_confidence, 4),
             "media_type": self.media_type,
+            "content_category": self.content_category,
             "scores": {k: round(v, 4) if v is not None else None for k, v in self.scores.items()},
             "processing_time_ms": round(self.processing_time_ms, 1),
             "metadata": self.metadata,
@@ -138,3 +140,12 @@ class AnalysisReport:
     @property
     def is_real(self) -> bool:
         return self.verdict == "REAL"
+
+    @property
+    def is_uncertain(self) -> bool:
+        return self.verdict == "UNCERTAIN"
+
+    @property
+    def is_not_applicable(self) -> bool:
+        """True when Stage-0 determined the media is non-biometric artwork."""
+        return self.verdict == "NOT_APPLICABLE"

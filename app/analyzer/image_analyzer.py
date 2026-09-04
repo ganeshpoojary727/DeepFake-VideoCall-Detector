@@ -23,6 +23,11 @@ import torch
 import torch.nn.functional as F
 
 from app.analyzer.analysis_report import AnalysisReport
+from app.analyzer.content_classifier import (
+    ContentClassification,
+    ContentClassifier,
+    PHOTOGRAPHIC_HUMAN,
+)
 from app.analyzer.image_forensics import ImageForensics
 from app.config.settings import settings
 from app.utils.logger import get_logger
@@ -36,7 +41,20 @@ from app.video.utils.visualization import GradCAM
 
 logger = get_logger(__name__)
 
-_DECISION_THRESHOLD = 0.60
+_THRESHOLD_FAKE = 0.70   # Confidence must be ≥70% to call FAKE
+_THRESHOLD_REAL = 0.30   # Confidence must be ≤30% fake to call REAL
+                         # 31–69% → UNCERTAIN (never flag a coin-flip as deepfake)
+
+# Singleton Stage-0 content pre-classifier (lightweight, no GPU needed)
+_content_classifier: Optional[ContentClassifier] = None
+
+
+def _get_content_classifier() -> ContentClassifier:
+    """Return the module-level ContentClassifier singleton (lazy-init)."""
+    global _content_classifier
+    if _content_classifier is None:
+        _content_classifier = ContentClassifier(face_conf_threshold=0.50)
+    return _content_classifier
 
 
 class ImageAnalyzer:
@@ -89,14 +107,14 @@ class ImageAnalyzer:
         -------
         Dict[str, Any]
             Standardized telemetry dictionary:
-            - verdict: "REAL" | "FAKE"
+            - verdict: "REAL" | "FAKE" | "NOT_APPLICABLE"
             - confidence: float
             - raw_scores: {"real_prob": float, "fake_prob": float}
             - visual_cues: {"ela_discrepancy_score": float, "fft_spectral_anomaly": float, "boundary_inconsistency": float}
             - timeline: list with frame 0
             - key_artifacts: list of top anomalies with bbox and Grad-CAM saliency
+            - content_classification: dict (Stage-0 pre-classifier result)
         """
-        self._ensure_model_loaded()
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"Image file not found: {path}")
@@ -104,7 +122,38 @@ class ImageAnalyzer:
         image_bgr = self._load_image(path)
         orig_h, orig_w = image_bgr.shape[:2]
 
-        # 1. Classical Forensics
+        # ── Stage-0: Content Pre-Classification ──────────────────────────────
+        clf = _get_content_classifier()
+        content_result: ContentClassification = clf.classify(image_bgr)
+
+        if not content_result.is_biometric_applicable:
+            logger.info(
+                "ImageAnalyzer: Stage-0 pre-classifier skipped deepfake analysis "
+                "for %s — category=%s, confidence=%.3f",
+                path.name,
+                content_result.category,
+                content_result.confidence,
+            )
+            return {
+                "verdict": "NOT_APPLICABLE",
+                "confidence": round(content_result.confidence, 4),
+                "raw_scores": {
+                    "real_prob": 0.0,
+                    "fake_prob": 0.0,
+                },
+                "visual_cues": {
+                    "ela_discrepancy_score": 0.0,
+                    "fft_spectral_anomaly": 0.0,
+                    "boundary_inconsistency": 0.0,
+                },
+                "timeline": [],
+                "key_artifacts": [],
+                "content_classification": content_result.to_dict(),
+            }
+
+        # Biometric content confirmed — load neural model and preprocessors
+        self._ensure_model_loaded()
+
         face_box = self._face_detector.detect_largest(image_bgr)
         bbox_coords = None
         if face_box is not None:
@@ -141,19 +190,26 @@ class ImageAnalyzer:
         final_fake_prob = float(np.clip(final_fake_prob, 0.01, 0.99))
         final_real_prob = float(round(1.0 - final_fake_prob, 4))
 
-        if final_fake_prob >= 0.5:
+        # 5. Calibrated Verdict Determination
+        # FAKE  → fake_prob ≥ 0.70  (definitive manipulation evidence)
+        # REAL  → fake_prob ≤ 0.30  (definitive authenticity)
+        # UNCERTAIN → 0.31–0.69   (coin-flip zone; never escalate)
+        if final_fake_prob >= _THRESHOLD_FAKE:
             verdict = "FAKE"
             confidence = final_fake_prob
-        else:
+        elif final_fake_prob <= _THRESHOLD_REAL:
             verdict = "REAL"
             confidence = final_real_prob
+        else:
+            verdict = "UNCERTAIN"
+            confidence = max(final_real_prob, final_fake_prob)
 
         # Format timeline & key artifacts
         timeline = [{
             "frame_idx": 0,
             "timestamp_sec": 0.0,
             "spoof_prob": round(final_fake_prob, 4),
-            "is_anomaly": bool(final_fake_prob >= 0.55),
+            "is_anomaly": bool(final_fake_prob >= _THRESHOLD_FAKE),
         }]
 
         bbox_list = [bbox_info["x"], bbox_info["y"], bbox_info["x"] + bbox_info["w"], bbox_info["y"] + bbox_info["h"]] if bbox_info else [0, 0, orig_w, orig_h]
@@ -165,7 +221,8 @@ class ImageAnalyzer:
             "saliency_peak": saliency_peak,
         }]
 
-        return {
+        # Include content_classification in the returned telemetry
+        result = {
             "verdict": verdict,
             "confidence": round(confidence, 4),
             "raw_scores": {
@@ -179,7 +236,9 @@ class ImageAnalyzer:
             },
             "timeline": timeline,
             "key_artifacts": key_artifacts,
+            "content_classification": content_result.to_dict(),
         }
+        return result
 
     def analyze(self, file_path: Union[str, Path]) -> AnalysisReport:
         """Analyze an image file and return an enriched AnalysisReport."""
@@ -191,6 +250,44 @@ class ImageAnalyzer:
 
             verdict = structured["verdict"]
             confidence = structured["confidence"]
+            content_cls = structured.get("content_classification", {})
+
+            # Stage-0 NOT_APPLICABLE short-circuit
+            if verdict == "NOT_APPLICABLE":
+                elapsed = (time.perf_counter() - start) * 1000.0
+                reason = content_cls.get(
+                    "reason",
+                    "Non-biometric content; deepfake analysis not applicable.",
+                )
+                logger.info(
+                    "ImageAnalyzer: %s → NOT_APPLICABLE — %s (%.1fms)",
+                    path.name, reason, elapsed,
+                )
+                return AnalysisReport(
+                    verdict="NOT_APPLICABLE",
+                    confidence=round(confidence, 4),
+                    media_type="image",
+                    real_confidence=0.0,
+                    fake_confidence=0.0,
+                    scores={"image": None},
+                    processing_time_ms=round(elapsed, 1),
+                    content_category=content_cls.get("category"),
+                    metadata={
+                        "file_name": path.name,
+                        "model": "Stage-0 ContentClassifier (no neural inference)",
+                        "content_classification": content_cls,
+                        "reason": reason,
+                        "raw_scores": {"real_prob": 0.0, "fake_prob": 0.0},
+                        "visual_cues": {
+                            "ela_discrepancy_score": 0.0,
+                            "fft_spectral_anomaly": 0.0,
+                            "boundary_inconsistency": 0.0,
+                        },
+                        "timeline": [],
+                        "key_artifacts": [],
+                    },
+                )
+
             real_prob = structured["raw_scores"]["real_prob"]
             fake_prob = structured["raw_scores"]["fake_prob"]
             visual_cues = structured["visual_cues"]

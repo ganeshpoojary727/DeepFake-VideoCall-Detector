@@ -6,13 +6,15 @@ import {
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
+  Palette,
 } from "lucide-react";
 
 interface VerdictGaugeProps {
-  verdict: "REAL" | "FAKE" | "UNCERTAIN" | string;
+  verdict: "REAL" | "FAKE" | "UNCERTAIN" | "NOT_APPLICABLE" | string;
   confidence: number; // 0.0 to 1.0
   mediaType: string;
   processingTimeMs: number;
+  contentCategory?: string | null;
 }
 
 export default function VerdictGauge({
@@ -20,11 +22,13 @@ export default function VerdictGauge({
   confidence,
   mediaType,
   processingTimeMs,
+  contentCategory,
 }: VerdictGaugeProps) {
   const [animatedConfidence, setAnimatedConfidence] = useState(0);
 
   const isFake = verdict === "FAKE";
   const isReal = verdict === "REAL";
+  const isNotApplicable = verdict === "NOT_APPLICABLE";
   const confidencePct = Math.round(confidence * 100);
 
   const realPct = isReal ? confidencePct : 100 - confidencePct;
@@ -34,6 +38,14 @@ export default function VerdictGauge({
     const timer = setTimeout(() => setAnimatedConfidence(confidencePct), 100);
     return () => clearTimeout(timer);
   }, [confidencePct]);
+
+  const _CATEGORY_LABELS: Record<string, string> = {
+    DIGITAL_ART_ANIME: "Digital Illustration / Anime",
+    SCENERY_OBJECT: "Scenery / Wallpaper / Object",
+  };
+  const categoryLabel = contentCategory
+    ? (_CATEGORY_LABELS[contentCategory] ?? contentCategory)
+    : "Non-Biometric Artwork";
 
   const verdictConfig = {
     REAL: {
@@ -65,6 +77,16 @@ export default function VerdictGauge({
       gradientClass: "gradient-text-cyber",
       bgGradient: "from-[#0c0d14] via-[#1a1608] to-[#0c0d14]",
       meterGradient: "from-[#f59e0b] to-[#6366f1]",
+    },
+    NOT_APPLICABLE: {
+      label: "NOT APPLICABLE — NON-BIOMETRIC CONTENT",
+      icon: Palette,
+      badgeClass: "verdict-uncertain",
+      textColor: "text-[#a78bfa]",
+      glowClass: "glow-amber",
+      gradientClass: "gradient-text-cyber",
+      bgGradient: "from-[#0c0d14] via-[#110d1a] to-[#0c0d14]",
+      meterGradient: "from-[#a78bfa] to-[#6366f1]",
     },
   };
 
@@ -105,10 +127,16 @@ export default function VerdictGauge({
               >
                 {config.label}
               </motion.h2>
-              <p className="mt-1 text-xs text-[#9ca3af] font-mono">
-                Latency: {processingTimeMs.toFixed(0)}ms • {mediaType} •
-                Multi-Modal Fusion Engine
-              </p>
+              {isNotApplicable ? (
+                <p className="mt-1 text-xs text-[#a78bfa]/80 font-mono">
+                  Content Category: {categoryLabel} • {mediaType} • Stage-0 Pre-Classifier
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-[#9ca3af] font-mono">
+                  Latency: {processingTimeMs.toFixed(0)}ms • {mediaType} •
+                  Multi-Modal Fusion Engine
+                </p>
+              )}
             </div>
           </div>
 
@@ -122,52 +150,81 @@ export default function VerdictGauge({
             <div
               className={`text-4xl md:text-5xl font-extrabold tracking-tight ${config.gradientClass}`}
             >
-              {animatedConfidence}%
+              {isNotApplicable ? "N/A" : `${animatedConfidence}%`}
             </div>
             <span className="text-[11px] uppercase tracking-wider text-[#6b7280] font-mono">
-              {isReal ? "Authenticity" : isFake ? "Deepfake Risk" : "Certainty"}
+              {isReal
+                ? "Authenticity"
+                : isFake
+                ? "Deepfake Risk"
+                : isNotApplicable
+                ? "Not Applicable"
+                : "Certainty"}
             </span>
           </motion.div>
         </div>
 
-        {/* Dual-Sided Probability Slider */}
-        <div className="mt-8 pt-5 border-t border-white/[0.06]">
-          <div className="flex justify-between items-center text-xs font-mono mb-3">
-            <span className="text-[#10b981] font-semibold flex items-center gap-1.5">
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Real / Authenticity: {realPct}%
-            </span>
-            <span className="text-[#ef4444] font-semibold flex items-center gap-1.5">
-              Deepfake / Synthetic: {fakePct}%
-              <ShieldAlert className="h-3.5 w-3.5" />
-            </span>
-          </div>
+        {/* NOT_APPLICABLE explanation banner */}
+        {isNotApplicable && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.4 }}
+            className="mt-6 pt-5 border-t border-white/[0.06]"
+          >
+            <div className="rounded-xl border border-[#a78bfa]/20 bg-[#a78bfa]/5 px-4 py-3 text-xs text-[#a78bfa]/90 font-mono leading-relaxed">
+              <span className="font-bold text-[#a78bfa]">ℹ️ Why no deepfake score?</span>
+              <br />
+              Deepfake forensics analyze biometric human features (facial geometry, skin
+              micro-texture, boundary blending). This content was identified as{" "}
+              <span className="text-white font-semibold">{categoryLabel}</span> — a
+              non-photorealistic media type. Running neural deepfake models on artwork
+              would produce statistically meaningless scores.
+            </div>
+          </motion.div>
+        )}
 
-          {/* Dual bar */}
-          <div className="h-3 w-full rounded-full bg-white/[0.06] overflow-hidden flex">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${realPct}%` }}
-              transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
-              className="h-full bg-gradient-to-r from-[#10b981] to-[#38bdf8]"
-            />
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${fakePct}%` }}
-              transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
-              className="h-full bg-gradient-to-r from-[#ef4444] to-[#f59e0b]"
-            />
-          </div>
+        {/* Dual-Sided Probability Slider — only for REAL / FAKE / UNCERTAIN */}
+        {!isNotApplicable && (
+          <div className="mt-8 pt-5 border-t border-white/[0.06]">
+            <div className="flex justify-between items-center text-xs font-mono mb-3">
+              <span className="text-[#10b981] font-semibold flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                Real / Authenticity: {realPct}%
+              </span>
+              <span className="text-[#ef4444] font-semibold flex items-center gap-1.5">
+                Deepfake / Synthetic: {fakePct}%
+                <ShieldAlert className="h-3.5 w-3.5" />
+              </span>
+            </div>
 
-          {/* Center divider marker */}
-          <div className="relative h-0">
-            <div
-              className="absolute top-[-14px] w-0.5 h-5 bg-white/30 rounded-full"
-              style={{ left: "50%", transform: "translateX(-50%)" }}
-            />
+            {/* Dual bar */}
+            <div className="h-3 w-full rounded-full bg-white/[0.06] overflow-hidden flex">
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${realPct}%` }}
+                transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
+                className="h-full bg-gradient-to-r from-[#10b981] to-[#38bdf8]"
+              />
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${fakePct}%` }}
+                transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
+                className="h-full bg-gradient-to-r from-[#ef4444] to-[#f59e0b]"
+              />
+            </div>
+
+            {/* Center divider marker */}
+            <div className="relative h-0">
+              <div
+                className="absolute top-[-14px] w-0.5 h-5 bg-white/30 rounded-full"
+                style={{ left: "50%", transform: "translateX(-50%)" }}
+              />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
 }
+

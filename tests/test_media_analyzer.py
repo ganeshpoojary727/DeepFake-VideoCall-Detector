@@ -180,7 +180,9 @@ class TestImageAnalyzer:
 
         assert isinstance(report, AnalysisReport)
         assert report.media_type == "image"
-        assert report.verdict in {"REAL", "FAKE", "UNCERTAIN"}
+        # NOT_APPLICABLE is a valid verdict when Stage-0 determines the image
+        # has no biometric subject (e.g., a synthetic circle with no human face).
+        assert report.verdict in {"REAL", "FAKE", "UNCERTAIN", "NOT_APPLICABLE"}
         assert 0.0 <= report.confidence <= 1.0
         assert "image" in report.scores
         assert report.processing_time_ms > 0

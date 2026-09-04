@@ -20,6 +20,7 @@ import PipelineCards from "../components/PipelineCards";
 import Footer from "../components/Footer";
 import { analyzeMediaFile } from "../lib/api";
 import { ScanSession } from "../lib/types";
+import { storeScanFile, pruneOldScanFiles } from "../lib/fileStorage";
 
 export default function Home() {
   const router = useRouter();
@@ -57,20 +58,30 @@ export default function Home() {
         timestamp: new Date().toISOString(),
         report,
       };
-      sessionStorage.setItem(`scan_${scanId}`, JSON.stringify(session));
 
-      // Also store the file in sessionStorage as base64 for media preview
-      const reader = new FileReader();
-      reader.onload = () => {
-        sessionStorage.setItem(`scan_file_${scanId}`, JSON.stringify({
-          name: selectedFile.name,
-          type: selectedFile.type,
-          data: reader.result,
-        }));
-        // Navigate to report page
-        router.push(`/report/${scanId}`);
-      };
-      reader.readAsDataURL(selectedFile);
+      // Store in sessionStorage for the report page (clean old entries if full)
+      try {
+        sessionStorage.setItem(`scan_${scanId}`, JSON.stringify(session));
+      } catch {
+        for (let i = sessionStorage.length - 1; i >= 0; i--) {
+          const k = sessionStorage.key(i);
+          if (k && (k.startsWith("scan_") || k.startsWith("scan_file_"))) {
+            sessionStorage.removeItem(k);
+          }
+        }
+        try {
+          sessionStorage.setItem(`scan_${scanId}`, JSON.stringify(session));
+        } catch {
+          console.warn("Could not write session metadata to sessionStorage");
+        }
+      }
+
+      // Store the raw media File in IndexedDB (bypasses 5MB browser quota)
+      await storeScanFile(scanId, selectedFile);
+      pruneOldScanFiles().catch(() => {});
+
+      // Navigate to report page
+      router.push(`/report/${scanId}`);
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Failed to analyze media file.";
