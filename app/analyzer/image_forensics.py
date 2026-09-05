@@ -315,7 +315,8 @@ class ImageForensics:
             if p.size > 0
         ]
         mean_border_step = float(np.mean(border_energies)) if border_energies else 10.0
-        face_energy = float(np.mean(grad_mag[y1:y2, x1:x2])) + 1e-4
+        face_roi = grad_mag[y1:y2, x1:x2]
+        face_energy = (float(np.mean(face_roi)) + 1e-4) if face_roi.size > 0 else 10.0
 
         boundary_step_ratio = mean_border_step / face_energy
 

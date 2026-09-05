@@ -39,7 +39,9 @@ class WeightLoader:
         logger.info(f"Loading model weights from checkpoint: {path}")
         checkpoint = torch.load(path, map_location=device)
 
-        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        if isinstance(checkpoint, dict) and "model_state" in checkpoint:
+            state_dict = checkpoint["model_state"]
+        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
             state_dict = checkpoint["state_dict"]
         elif isinstance(checkpoint, dict) and "model" in checkpoint:
             state_dict = checkpoint["model"]
@@ -51,11 +53,15 @@ class WeightLoader:
         # Handle potential 'module.' prefix from DataParallel/DistributedDataParallel
         clean_state_dict = {}
         for k, v in state_dict.items():
-            key = k.replace("module.", "").replace("net.", "")
+            key = k[7:] if k.startswith("module.") else k
             clean_state_dict[key] = v
 
         try:
             missing_keys, unexpected_keys = model.load_state_dict(clean_state_dict, strict=strict)
+            if len(missing_keys) > 10:
+                logger.warning(
+                    f"Large number of missing keys detected ({len(missing_keys)}): {missing_keys[:5]}..."
+                )
             logger.info(
                 f"Weights loaded successfully. (Missing keys: {len(missing_keys)}, "
                 f"Unexpected keys: {len(unexpected_keys)})"

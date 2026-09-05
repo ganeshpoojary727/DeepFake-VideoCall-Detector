@@ -12,13 +12,16 @@ Endpoints
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+import cv2
+import numpy as np
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -34,8 +37,9 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Global lazy analyzer instance
+# Global lazy analyzer instances
 _analyzer: MediaAnalyzer | None = None
+_live_detector: Any | None = None
 
 
 def get_analyzer() -> MediaAnalyzer:
@@ -44,6 +48,15 @@ def get_analyzer() -> MediaAnalyzer:
     if _analyzer is None:
         _analyzer = MediaAnalyzer(device="auto")
     return _analyzer
+
+
+def get_live_detector():
+    """Return or initialize singleton RealtimeLiveDetector for streaming."""
+    global _live_detector
+    if _live_detector is None:
+        from app.realtime import RealtimeLiveDetector
+        _live_detector = RealtimeLiveDetector()
+    return _live_detector
 
 
 # ──────────────────────────────────────────────
@@ -352,6 +365,61 @@ def create_app() -> FastAPI:
             return resp
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
+
+    # ── Real-Time Live Webcam & Video Call Streaming Endpoints ────────────────
+
+    @app.websocket("/ws/live-stream")
+    async def websocket_live_stream(websocket: WebSocket) -> None:
+        """Bidirectional WebSocket endpoint for live webcam and video call stream detection."""
+        await websocket.accept()
+        detector = get_live_detector()
+        logger.info("Live stream WebSocket connected")
+        try:
+            while True:
+                data = await websocket.receive_text()
+                try:
+                    payload = json.loads(data)
+                    frame_b64 = payload.get("frame", "")
+                    client_ts = payload.get("timestamp")
+                except Exception:
+                    frame_b64 = data
+                    client_ts = None
+
+                if not frame_b64:
+                    await websocket.send_json({"status": "idle", "message": "No frame data"})
+                    continue
+
+                telemetry = detector.process_base64_frame(frame_b64, timestamp=client_ts)
+                await websocket.send_json(telemetry)
+        except WebSocketDisconnect:
+            logger.info("Live stream WebSocket client disconnected")
+        except Exception as exc:
+            logger.warning("Live stream WebSocket error: %s", exc)
+
+    @app.post("/api/v1/live/frame", tags=["Live Stream"])
+    async def live_frame_analysis(
+        file: Optional[UploadFile] = File(None),
+        body: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Analyze a single live video frame via REST fallback."""
+        detector = get_live_detector()
+        if file is not None:
+            content = await file.read()
+            nparr = np.frombuffer(content, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is None:
+                raise HTTPException(status_code=400, detail="Invalid image frame data")
+            return detector.process_frame(frame)
+        elif body and "frame" in body:
+            return detector.process_base64_frame(body["frame"], timestamp=body.get("timestamp"))
+        raise HTTPException(status_code=400, detail="Either file upload or JSON with 'frame' (base64) required")
+
+    @app.post("/api/v1/live/reset", tags=["Live Stream"])
+    async def reset_live_stream() -> Dict[str, str]:
+        """Reset the live stream detector buffer and tracking state."""
+        detector = get_live_detector()
+        detector.reset()
+        return {"status": "reset", "message": "Live detector state cleared"}
 
     return app
 

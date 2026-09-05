@@ -70,6 +70,16 @@ export default function Navbar() {
             </button>
           ))}
           <a
+            href="/live"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-500/15 border border-red-500/30 rounded-lg hover:bg-red-500/25 transition-all shadow-[0_0_15px_rgba(239,68,68,0.2)]"
+          >
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+            </span>
+            Live Call Guard
+          </a>
+          <a
             href="http://localhost:8000/docs"
             target="_blank"
             rel="noopener noreferrer"

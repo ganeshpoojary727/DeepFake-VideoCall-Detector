@@ -60,7 +60,17 @@ class VideoDeepfakeDetector:
         """Initialize EfficientNet model and GradCAM visualizer."""
         try:
             self.model = EfficientNetB4Model()
-            weights = Path(model_path or (settings.project_root / "trained_models" / "video" / "best_model.pt"))
+            if model_path:
+                weights = Path(model_path)
+            else:
+                video_dir = settings.project_root / "trained_models" / "video"
+                for cand in ["best_accuracy.pt", "best_model.pt", "best_auc.pt"]:
+                    if (video_dir / cand).exists():
+                        weights = video_dir / cand
+                        break
+                else:
+                    weights = video_dir / "best_model.pt"
+
             if weights.exists():
                 self.model.load_weights(str(weights), strict=False)
                 logger.info("VideoDeepfakeDetector: Loaded weights from %s", weights)
@@ -168,7 +178,7 @@ class VideoDeepfakeDetector:
 
                 # Per-frame neural estimation (combining spatial feature with forensic cues)
                 for idx, c in enumerate(cues_list):
-                    frame_p = 0.55 * seq_fake_prob + 0.45 * c["combined_score"]
+                    frame_p = 0.85 * seq_fake_prob + 0.15 * c["combined_score"]
                     neural_probs.append(float(np.clip(frame_p, 0.01, 0.99)))
             except Exception as exc:
                 logger.debug("Neural forward pass exception: %s", exc)

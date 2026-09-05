@@ -181,3 +181,34 @@ export interface DiagnosticFactorDisplay {
   description: string;
   color: "emerald" | "crimson" | "amber" | "cyan";
 }
+
+export interface LiveHistoryPoint {
+  t: number;
+  score: number;
+  verdict: "REAL" | "FAKE" | "UNCERTAIN" | "NOT_APPLICABLE";
+  fps?: number;
+}
+
+export interface LiveStreamTelemetry {
+  status: "active" | "non_biometric" | "idle" | "error";
+  verdict: "REAL" | "FAKE" | "UNCERTAIN" | "NOT_APPLICABLE";
+  confidence: number;
+  fake_confidence: number;
+  real_confidence: number;
+  face_detected: boolean;
+  bbox?: { x: number; y: number; w: number; h: number } | null;
+  threat_level?: "NOMINAL" | "ELEVATED" | "CRITICAL";
+  content_category?: string;
+  explanation?: string;
+  buffer_depth?: number;
+  buffer_capacity?: number;
+  fps: number;
+  latency_ms: number;
+  visual_cues?: {
+    fft_spectral_anomaly?: number;
+    boundary_inconsistency?: number;
+    ela_discrepancy?: number;
+    [key: string]: unknown;
+  };
+  history: LiveHistoryPoint[];
+}

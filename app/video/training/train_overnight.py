@@ -51,6 +51,20 @@ def prevent_windows_sleep() -> None:
             logger.warning("Could not set Windows execution state: %s", err)
 
 
+BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+
+
+def set_smooth_process_priority() -> None:
+    """Set Windows process priority to BELOW_NORMAL so the desktop and UI remain smooth and lag-free."""
+    if sys.platform == "win32":
+        try:
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            ctypes.windll.kernel32.SetPriorityClass(handle, BELOW_NORMAL_PRIORITY_CLASS)
+            logger.info("Windows process priority set to BELOW_NORMAL (desktop will stay smooth & responsive)")
+        except Exception as err:
+            logger.warning("Could not set process priority: %s", err)
+
+
 def allow_windows_sleep() -> None:
     """Restore default Windows sleep state when training finishes."""
     if sys.platform == "win32":
@@ -67,14 +81,37 @@ atexit.register(allow_windows_sleep)
 def main() -> Dict[str, Any]:
     parser = argparse.ArgumentParser(description="Overnight Video DeepFake Training")
     parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs (default: 20)")
-    parser.add_argument("--batch-size", type=int, default=8, help="Batch size (fits 6GB VRAM on RTX 4050)")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size (utilizes ~4-5GB VRAM on RTX 4050)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default: 1e-4)")
-    parser.add_argument("--num-workers", type=int, default=4, help="DataLoader workers (default: 4)")
+    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers (default 0 for crash-free Windows execution with pre-cached frames)")
     parser.add_argument("--target-per-class", type=int, default=1800, help="Target samples per class")
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume training from")
+    parser.add_argument("--full-val", action="store_true", default=False, help="Run full validation set every epoch instead of fast subset")
+    parser.add_argument("--val-max-batches", type=int, default=25, help="Max validation batches for intermediate epochs (default: 25 = 200 videos ~35s)")
     args, _ = parser.parse_known_args()
 
-    # 1. Keep PC awake
+    # Limit CPU thread hogging so UI and OS desktop stay completely smooth
+    import os
+    os.environ["OMP_NUM_THREADS"] = "2"
+    os.environ["MKL_NUM_THREADS"] = "2"
+    os.environ["OPENCV_LOG_LEVEL"] = "OFF"
+    torch.set_num_threads(2)
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # 0. Configure native log file
+    log_dir = settings.project_root / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"overnight_training_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    import logging
+    fh = logging.FileHandler(str(log_file), encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"))
+    logging.getLogger().addHandler(fh)
+
+    # 1. Keep PC awake and make it smooth
     prevent_windows_sleep()
+    set_smooth_process_priority()
 
     set_seed(42)
     device = settings.DEVICE
@@ -120,6 +157,7 @@ def main() -> Dict[str, Any]:
     checkpoint_dir = settings.project_root / "trained_models" / "video"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+    val_batches = None if args.full_val else args.val_max_batches
     cfg_train = VideoTrainingConfig(
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -127,13 +165,14 @@ def main() -> Dict[str, Any]:
         device=str(device),
         use_amp=torch.cuda.is_available(),
         checkpoint_dir=checkpoint_dir,
+        val_max_batches=val_batches,
     )
 
     cfg_model = ModelConfig(
         backbone_name="efficientnet_b4",
         attention_name="temporal_transformer",
         num_classes=2,
-        freeze_backbone=True,
+        freeze_backbone=False,
         pretrained=True,
         sequence_length=16,
         dropout=0.25,
@@ -149,7 +188,29 @@ def main() -> Dict[str, Any]:
         .build()
     )
 
-    # 6. Execute Training
+    # Partial fine-tuning: freeze low-level stages 0..4, train high-level stages 5..7 + temporal transformer
+    # This utilizes ~4.0 GB VRAM on your RTX 4050 and drastically accelerates GPU tensor parallelism
+    trainer.model.backbone.freeze_layers(until_stage=5)
+    import torch.optim as optim
+    trainable_params = [p for p in trainer.model.parameters() if p.requires_grad]
+    trainer.optimizer = optim.AdamW(trainable_params, lr=args.lr, weight_decay=1e-4)
+    trainer.scheduler = optim.lr_scheduler.CosineAnnealingLR(trainer.optimizer, T_max=args.epochs)
+    logger.info("⚡ GPU Acceleration Configured: %s trainable parameters (~4.0 GB VRAM target)", f"{sum(p.numel() for p in trainable_params):,}")
+
+    # 6. Execute Training (with automatic or explicit resume)
+    resume_target = args.resume
+    if resume_target is None and (checkpoint_dir / "latest.pt").exists():
+        resume_target = str(checkpoint_dir / "latest.pt")
+        logger.info("Found existing checkpoint '%s' — auto-resuming training seamlessly.", resume_target)
+
+    if resume_target:
+        resume_path = Path(resume_target)
+        if resume_path.exists():
+            resumed_epoch = trainer.resume_from_checkpoint(resume_path)
+            logger.info("  • Resumed training from %s at epoch %d", resume_path, resumed_epoch)
+        else:
+            logger.warning("  • Checkpoint for resume not found at %s. Starting fresh.", resume_path)
+
     start_time = time.time()
     try:
         history = trainer.train()

@@ -114,3 +114,35 @@ export async function getSystemHealth(): Promise<SystemStatus> {
   }
   return response.json();
 }
+
+export const WS_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
+  .replace(/^https/, "wss")
+  .replace(/^http/, "ws");
+
+/**
+ * Send a single webcam frame to REST fallback endpoint
+ */
+export async function sendLiveFrame(frameBase64: string): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/live/frame`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ frame: frameBase64 }),
+  });
+  if (!response.ok) {
+    throw new Error(`Live frame analysis failed with status ${response.status}`);
+  }
+  return response.json();
+}
+
+/**
+ * Reset live stream detector buffer and tracking state
+ */
+export async function resetLiveStream(): Promise<{ status: string; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/live/reset`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error("Failed to reset live stream state");
+  }
+  return response.json();
+}

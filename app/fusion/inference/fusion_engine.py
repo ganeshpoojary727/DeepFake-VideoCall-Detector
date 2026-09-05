@@ -7,14 +7,21 @@ into a consolidated, second-by-second aligned forensic diagnosis.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 import numpy as np
 
-from app.analyzer.analysis_report import ConsolidatedForensicReport
+if TYPE_CHECKING:
+    from app.analyzer.analysis_report import ConsolidatedForensicReport
+
 from app.config.settings import settings
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _report_cls():
+    from app.analyzer.analysis_report import ConsolidatedForensicReport
+    return ConsolidatedForensicReport
 
 
 class MultimodalFusion:
@@ -35,16 +42,25 @@ class MultimodalFusion:
     # ── Backward-compatible Simple Score Fusion ────────────────────────────────
 
     def evaluate(self, audio_score: float, video_score: float) -> Dict[str, Any]:
-        """Compute weighted fusion of audio and video scores (backward-compatible)."""
-        combined = (self.audio_weight * audio_score) + (self.video_weight * video_score)
+        """Compute weighted fusion of audio and video scores with adversarial gating.
+        
+        If either modality shows clear manipulation evidence (>= threshold),
+        the tampering is preserved so clean audio cannot mask a manipulated face.
+        """
+        a = float(audio_score)
+        v = float(video_score)
+        if v >= self.threshold or a >= self.threshold:
+            combined = max(v, a)
+        else:
+            combined = (self.audio_weight * a) + (self.video_weight * v)
         combined = float(np.clip(combined, 0.0, 1.0))
         prediction = "DEEPFAKE" if combined >= self.threshold else "REAL"
 
         return {
             "combined_score": round(combined, 4),
             "prediction": prediction,
-            "audio_score": round(float(audio_score), 4),
-            "video_score": round(float(video_score), 4),
+            "audio_score": round(a, 4),
+            "video_score": round(v, 4),
             "audio_weight": self.audio_weight,
             "video_weight": self.video_weight,
         }
@@ -93,7 +109,7 @@ class MultimodalFusion:
             return self._fuse_both_modalities(audio_telemetry, visual_telemetry, processing_time_ms, file_name)
 
         # Fallback empty case
-        return ConsolidatedForensicReport(
+        return _report_cls()(
             media_type=media_type.upper(),
             verdict="REAL",
             overall_confidence=0.5,
@@ -142,7 +158,7 @@ class MultimodalFusion:
             },
         }
 
-        return ConsolidatedForensicReport(
+        return _report_cls()(
             media_type="AUDIO",
             verdict=verdict,
             overall_confidence=round(confidence, 4),
@@ -191,7 +207,7 @@ class MultimodalFusion:
             "classical_forensics": visual_telemetry.get("visual_cues", {}),
         }
 
-        return ConsolidatedForensicReport(
+        return _report_cls()(
             media_type=media_type,
             verdict=verdict,
             overall_confidence=round(confidence, 4),
@@ -219,11 +235,11 @@ class MultimodalFusion:
         # 1. Base weighted sum
         base_fused = (self.audio_weight * p_audio) + (self.video_weight * p_visual)
 
-        # 2. Dynamic Gating & Strong Artifact Anomaly Boosting (>= 0.70)
+        # 2. Dynamic Adversarial Gating:
+        # If either modality indicates tampering (>= threshold), clean audio or video must NOT mask it.
         max_modality = max(p_audio, p_visual)
-        if max_modality >= self.anomaly_threshold:
-            # Boost overall spoof score if either modality detects strong manipulation artifacts
-            fused_score = max(base_fused, 0.40 * (p_audio + p_visual) + 0.35 * max_modality)
+        if max_modality >= self.threshold:
+            fused_score = max(base_fused, max_modality)
         else:
             fused_score = base_fused
 
@@ -264,7 +280,7 @@ class MultimodalFusion:
             "classical_forensics": classical,
         }
 
-        return ConsolidatedForensicReport(
+        return _report_cls()(
             media_type="MULTIMODAL",
             verdict=verdict,
             overall_confidence=round(overall_confidence, 4),
@@ -323,8 +339,8 @@ class MultimodalFusion:
 
             # Fused temporal score
             fused_t = (self.audio_weight * a_val) + (self.video_weight * v_val)
-            if max(a_val, v_val) >= self.anomaly_threshold:
-                fused_t = max(fused_t, 0.40 * (a_val + v_val) + 0.35 * max(a_val, v_val))
+            if max(a_val, v_val) >= self.threshold:
+                fused_t = max(fused_t, max(a_val, v_val))
             fused_t = float(np.clip(fused_t, 0.01, 0.99))
 
             synced.append({

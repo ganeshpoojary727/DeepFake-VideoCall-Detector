@@ -41,9 +41,9 @@ from app.video.utils.visualization import GradCAM
 
 logger = get_logger(__name__)
 
-_THRESHOLD_FAKE = 0.70   # Confidence must be ≥70% to call FAKE
-_THRESHOLD_REAL = 0.30   # Confidence must be ≤30% fake to call REAL
-                         # 31–69% → UNCERTAIN (never flag a coin-flip as deepfake)
+_THRESHOLD_FAKE = 0.55   # Confidence must be ≥55% to call FAKE
+_THRESHOLD_REAL = 0.45   # Confidence must be ≤45% fake to call REAL
+                         # 46–54% → UNCERTAIN (borderline coin-flip zone)
 
 # Singleton Stage-0 content pre-classifier (lightweight, no GPU needed)
 _content_classifier: Optional[ContentClassifier] = None
@@ -80,12 +80,18 @@ class ImageAnalyzer:
         logger.info("ImageAnalyzer: Initializing neural model and preprocessors")
         self._model = EfficientNetB4Model()
 
-        weights_path = settings.project_root / "trained_models" / "video" / "best_model.pt"
-        if weights_path.exists():
+        video_dir = settings.project_root / "trained_models" / "video"
+        weights_path = None
+        for cand in ["best_accuracy.pt", "best_model.pt", "best_auc.pt"]:
+            if (video_dir / cand).exists():
+                weights_path = video_dir / cand
+                break
+
+        if weights_path is not None and weights_path.exists():
             self._model.load_weights(str(weights_path), strict=False)
             logger.info("ImageAnalyzer: Loaded weights from %s", weights_path)
         else:
-            logger.warning("ImageAnalyzer: Weights not found at %s", weights_path)
+            logger.warning("ImageAnalyzer: Weights not found in %s", video_dir)
 
         self._model.set_mode("inference")
         self._model.to(self.device)
@@ -183,9 +189,9 @@ class ImageAnalyzer:
 
         # 4. Multi-Signal Ensemble Fusion
         if num_faces > 0:
-            final_fake_prob = 0.60 * neural_fake_score + 0.40 * forensic_fake_score
+            final_fake_prob = 0.85 * neural_fake_score + 0.15 * forensic_fake_score
         else:
-            final_fake_prob = 0.35 * neural_fake_score + 0.65 * forensic_fake_score
+            final_fake_prob = 0.50 * neural_fake_score + 0.50 * forensic_fake_score
 
         final_fake_prob = float(np.clip(final_fake_prob, 0.01, 0.99))
         final_real_prob = float(round(1.0 - final_fake_prob, 4))

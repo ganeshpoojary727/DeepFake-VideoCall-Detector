@@ -28,9 +28,9 @@ from app.video.inference.video_detector import VideoDetector
 
 logger = get_logger(__name__)
 
-_THRESHOLD_FAKE = 0.70   # Confidence must be ≥70% to call FAKE
-_THRESHOLD_REAL = 0.30   # Confidence must be ≤30% fake to call REAL
-                         # 31–69% → UNCERTAIN (never flag a coin-flip as deepfake)
+_THRESHOLD_FAKE = 0.55   # Confidence must be ≥55% to call FAKE
+_THRESHOLD_REAL = 0.45   # Confidence must be ≤45% fake to call REAL
+                         # 46–54% → UNCERTAIN (borderline coin-flip zone)
 
 
 class VideoAnalyzer:
@@ -51,9 +51,8 @@ class VideoAnalyzer:
             return
 
         logger.info("VideoAnalyzer: Initializing VideoDetector with EfficientNet-B4")
-        weights_path = settings.project_root / "trained_models" / "video" / "best_model.pt"
         self._video_detector = VideoDetector(
-            model_path=weights_path if weights_path.exists() else None,
+            model_path=None,
             device=self._device,
             sequence_length=16,
         )

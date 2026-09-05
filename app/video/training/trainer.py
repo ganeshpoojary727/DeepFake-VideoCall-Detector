@@ -121,6 +121,7 @@ class ProductionVideoTrainer(BaseTrainer):
             save_top_k=self.config.save_top_k,
         )
 
+        self.start_epoch = 0
         self.best_val_loss = float("inf")
         self.best_accuracy = 0.0
         self.best_f1 = 0.0
@@ -171,21 +172,28 @@ class ProductionVideoTrainer(BaseTrainer):
         self.optimizer.zero_grad(set_to_none=True)
 
         gpu_alloc_gb = 0.0
+        gpu_res_gb = 0.0
+        gpu_peak_gb = 0.0
         last_gpu_query = 0.0
+        last_pbar_time = 0.0
 
         if self.device.type == "cuda":
             gpu_alloc_gb = torch.cuda.memory_allocated(self.device) / (1024**3)
+            gpu_res_gb = torch.cuda.memory_reserved(self.device) / (1024**3)
+            gpu_peak_gb = torch.cuda.max_memory_allocated(self.device) / (1024**3)
             last_gpu_query = time.perf_counter()
 
         pbar = tqdm(
             total=total_steps,
-            desc=f"Epoch {epoch_idx:02d}/{self.config.epochs:02d}",
+            desc=f"Epoch {epoch_idx:02d}/{self.config.epochs:02d} [Train]",
             dynamic_ncols=True,
             unit="batch",
             leave=True,
+            mininterval=0.5,
         )
 
         for step, batch in enumerate(loader):
+            t_batch_start = time.perf_counter()
             if isinstance(batch, dict):
                 x = batch["tensor"].to(self.device, non_blocking=True)
                 y = batch["label"].to(self.device, non_blocking=True)
@@ -225,10 +233,15 @@ class ProductionVideoTrainer(BaseTrainer):
                 all_probs.append(probs.detach().cpu())
                 all_labels.append(y.detach().cpu())
 
+            t_batch_end = time.perf_counter()
+            batch_dur = t_batch_end - t_batch_start
+
             # Query VRAM periodically (every 3.0 seconds) without forced GPU synchronization
             now = time.perf_counter()
             if self.device.type == "cuda" and (now - last_gpu_query >= 3.0):
                 gpu_alloc_gb = torch.cuda.memory_allocated(self.device) / (1024**3)
+                gpu_res_gb = torch.cuda.memory_reserved(self.device) / (1024**3)
+                gpu_peak_gb = torch.cuda.max_memory_allocated(self.device) / (1024**3)
                 last_gpu_query = now
 
             curr_lr = self.optimizer.param_groups[0]["lr"]
@@ -236,12 +249,33 @@ class ProductionVideoTrainer(BaseTrainer):
             running_acc = (correct_samples / total_samples) if total_samples > 0 else 0.0
 
             pbar.update(1)
-            pbar.set_postfix({
-                "loss": f"{running_loss_avg:.4f}",
-                "acc": f"{running_acc:.4f}",
-                "lr": f"{curr_lr:.2e}",
-                "VRAM": f"{gpu_alloc_gb:.1f}GB",
-            })
+
+            # Smooth rate-limited update (every 5 batches, >= 1.0s, or last step) to keep terminal responsive
+            if (step + 1) % 5 == 0 or (step + 1) == total_steps or (now - last_pbar_time >= 1.0):
+                last_pbar_time = now
+                pbar.set_postfix({
+                    "loss": f"{running_loss_avg:.4f}",
+                    "acc": f"{running_acc:.4f}",
+                    "VRAM": f"{gpu_res_gb:.1f}GB",
+                    "step": f"{batch_dur:.1f}s",
+                })
+
+            # Structured logger info every 50 batches
+            if (step + 1) % 50 == 0 or (step + 1) == total_steps:
+                logger.info(
+                    "Epoch %02d/%02d [%d/%d] | Loss: %.4f | Acc: %.4f | LR: %.2e | VRAM: %.2fGB (Peak: %.2fGB, Alloc: %.2fGB) | %.1fs/step",
+                    epoch_idx,
+                    self.config.epochs,
+                    step + 1,
+                    total_steps,
+                    running_loss_avg,
+                    running_acc,
+                    curr_lr,
+                    gpu_res_gb,
+                    gpu_peak_gb,
+                    gpu_alloc_gb,
+                    batch_dur,
+                )
 
         pbar.close()
 
@@ -263,8 +297,10 @@ class ProductionVideoTrainer(BaseTrainer):
         self,
         dataloader_or_dataset: Optional[Union[DataLoader, Dataset]] = None,
         batch_size: int = 4,
+        epoch: Optional[int] = None,
+        max_batches: Optional[int] = None,
     ) -> Dict[str, float]:
-        """Execute evaluation pass over validation dataset split."""
+        """Execute evaluation pass over validation dataset split with visible tqdm progress."""
         loader = self.val_loader
 
         if isinstance(dataloader_or_dataset, DataLoader):
@@ -284,9 +320,28 @@ class ProductionVideoTrainer(BaseTrainer):
         running_loss = 0.0
         all_probs = []
         all_labels = []
+        total_val_samples = 0
+        correct_val_samples = 0
 
-        with torch.no_grad():
-            for batch in loader:
+        total_batches = len(loader)
+        if max_batches is not None and max_batches > 0:
+            total_batches = min(total_batches, max_batches)
+
+        ep_desc = f"Epoch {epoch:02d} [Val]" if epoch is not None else "Validation"
+        pbar = tqdm(
+            total=total_batches,
+            desc=ep_desc,
+            dynamic_ncols=True,
+            unit="batch",
+            leave=False,
+            mininterval=0.5,
+        )
+
+        with torch.inference_mode():
+            for step, batch in enumerate(loader):
+                if max_batches is not None and step >= max_batches:
+                    break
+
                 if isinstance(batch, dict):
                     x = batch["tensor"].to(self.device, non_blocking=True)
                     y = batch["label"].to(self.device, non_blocking=True)
@@ -296,18 +351,32 @@ class ProductionVideoTrainer(BaseTrainer):
                 elif isinstance(batch, (tuple, list)):
                     x, y = batch[0].to(self.device), batch[1].to(self.device)
                 else:
+                    pbar.update(1)
                     continue
 
                 with self.amp_handler.autocast():
                     logits = self.model(x)
                     loss = self.loss_fn(logits, y)
 
-                running_loss += loss.item() * x.size(0)
+                b_size = x.size(0)
+                running_loss += loss.item() * b_size
+                total_val_samples += b_size
+
                 probs = torch.softmax(logits, dim=-1)[:, 1] if logits.size(-1) > 1 else torch.sigmoid(logits)
+                preds = torch.argmax(logits, dim=-1) if logits.size(-1) > 1 else (logits > 0.0).long()
+                correct_val_samples += (preds == y).sum().item()
+
                 all_probs.append(probs.cpu())
                 all_labels.append(y.cpu())
 
-        val_loss = running_loss / len(loader.dataset) if loader.dataset else 0.0
+                pbar.update(1)
+                cur_vloss = running_loss / max(1, total_val_samples)
+                cur_vacc = correct_val_samples / max(1, total_val_samples)
+                pbar.set_postfix({"val_loss": f"{cur_vloss:.4f}", "val_acc": f"{cur_vacc:.4f}"})
+
+        pbar.close()
+
+        val_loss = (running_loss / total_val_samples) if total_val_samples > 0 else 0.0
 
         if all_probs:
             y_true = torch.cat(all_labels, dim=0).numpy()
@@ -345,14 +414,33 @@ class ProductionVideoTrainer(BaseTrainer):
             if "optimizer" in chk and self.optimizer is not None:
                 self.optimizer.load_state_dict(chk["optimizer"])
 
-            return chk.get("epoch", 0)
+            if "scheduler" in chk and self.scheduler is not None and chk["scheduler"] is not None:
+                try:
+                    self.scheduler.load_state_dict(chk["scheduler"])
+                except Exception as e:
+                    logger.warning(f"Could not restore scheduler state: {e}")
+
+            if "metrics" in chk and isinstance(chk["metrics"], dict):
+                self.history = chk["metrics"]
+                if self.history.get("val_loss"):
+                    self.best_val_loss = min(self.history["val_loss"])
+                if self.history.get("val_accuracy"):
+                    self.best_accuracy = max(self.history["val_accuracy"])
+                if self.history.get("val_f1"):
+                    self.best_f1 = max(self.history["val_f1"])
+                if self.history.get("val_auc"):
+                    self.best_auc = max(self.history["val_auc"])
+
+            self.start_epoch = chk.get("epoch", 0)
+            return self.start_epoch
         return 0
 
     def train(self) -> Dict[str, Any]:
         """Execute complete multi-epoch training pipeline with progress bar and summary cards."""
-        logger.info(f"Executing training loop for {self.config.epochs} epoch(s)...")
+        start_ep = getattr(self, "start_epoch", 0)
+        logger.info(f"Executing training loop for epochs {start_ep + 1} to {self.config.epochs}...")
 
-        for epoch in range(1, self.config.epochs + 1):
+        for epoch in range(start_ep + 1, self.config.epochs + 1):
             if torch.cuda.is_available():
                 torch.cuda.reset_peak_memory_stats(self.device)
 
@@ -368,7 +456,10 @@ class ProductionVideoTrainer(BaseTrainer):
 
             val_metrics: Dict[str, float] = {}
             if self.val_loader is not None:
-                val_metrics = self.validate()
+                val_max_batches = getattr(self.config, "val_max_batches", None)
+                is_final_epoch = (epoch == self.config.epochs)
+                max_batches = None if is_final_epoch else val_max_batches
+                val_metrics = self.validate(epoch=epoch, max_batches=max_batches)
                 v_loss = val_metrics.get("val_loss", 0.0)
                 v_acc = val_metrics.get("accuracy", 0.0)
                 v_prec = val_metrics.get("precision", 0.0)
@@ -407,8 +498,15 @@ class ProductionVideoTrainer(BaseTrainer):
                 gpu_peak_gb=vram_gb,
             )
 
-            # Save latest checkpoint
+            # Save latest checkpoint and incrementally persist training_history.json
             self.save_checkpoint(epoch, path=self.config.checkpoint_dir / "latest.pt")
+            try:
+                import json
+                history_path = self.config.checkpoint_dir / "training_history.json"
+                with open(history_path, "w", encoding="utf-8") as f:
+                    json.dump(self.history, f, indent=2)
+            except Exception as hist_err:
+                logger.warning(f"Could not persist training_history.json: {hist_err}")
 
             if self.val_loader is not None:
                 v_loss = val_metrics.get("val_loss", 0.0)

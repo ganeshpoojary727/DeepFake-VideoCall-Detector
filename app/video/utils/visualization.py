@@ -56,14 +56,11 @@ class GradCAM:
             return
 
         def forward_hook(module: nn.Module, input: Any, output: torch.Tensor) -> None:
-            self.activations = output.detach()
-
-        def backward_hook(module: nn.Module, grad_input: Any, grad_output: Tuple[torch.Tensor, ...]) -> None:
-            if grad_output and grad_output[0] is not None:
-                self.gradients = grad_output[0].detach()
+            self.activations = output
+            if output.requires_grad:
+                output.register_hook(lambda grad: setattr(self, "gradients", grad))
 
         self._hooks.append(self.target_layer.register_forward_hook(forward_hook))
-        self._hooks.append(self.target_layer.register_full_backward_hook(backward_hook))
 
     def remove_hooks(self) -> None:
         """Clean up registered PyTorch hooks."""
@@ -127,7 +124,7 @@ class GradCAM:
             cam = torch.sum(weights * acts, dim=1, keepdim=True)
             cam = F.relu(cam)
 
-            cam_np = cam.squeeze().cpu().numpy().astype(np.float32)
+            cam_np = cam.squeeze().detach().cpu().numpy().astype(np.float32)
             if cam_np.ndim != 2:
                 cam_np = cam_np[0] if cam_np.ndim > 2 else np.zeros((16, 16), dtype=np.float32)
 

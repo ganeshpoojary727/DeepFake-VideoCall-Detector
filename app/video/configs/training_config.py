@@ -44,6 +44,7 @@ class VideoTrainingConfig:
     seed: int = 42
     log_interval: int = 10
     label_smoothing: float = 0.1
+    val_max_batches: Optional[int] = None
     extra_params: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

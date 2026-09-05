@@ -56,8 +56,13 @@ class BaseVideoModel(ABC, nn.Module):
             device: Optional computing device mapping.
         """
         checkpoint_path = Path(path)
-        state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
-        self.load_state_dict(state_dict)
+        payload = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        if isinstance(payload, dict):
+            state_dict = payload.get("model_state", payload.get("state_dict", payload.get("model", payload)))
+        else:
+            state_dict = payload
+        clean_dict = {k[7:] if k.startswith("module.") else k: v for k, v in state_dict.items()}
+        self.load_state_dict(clean_dict)
 
 
 # Base class alias

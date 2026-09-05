@@ -66,9 +66,21 @@ class EfficientNetB4Backbone(BaseVideoModel):
         Returns:
             torch.Tensor: Feature embeddings of shape (B, 1792).
         """
-        feats = self.net.features(x)
-        pooled = self.pool(feats)
-        return torch.flatten(pooled, 1)
+        is_frozen = not any(p.requires_grad for p in self.net.parameters())
+        if is_frozen:
+            was_training = self.net.training
+            self.net.eval()
+            with torch.no_grad():
+                feats = self.net.features(x)
+                pooled = self.pool(feats)
+                out = torch.flatten(pooled, 1)
+            if was_training:
+                self.net.train()
+            return out
+        else:
+            feats = self.net.features(x)
+            pooled = self.pool(feats)
+            return torch.flatten(pooled, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass forwarding to extract_features."""

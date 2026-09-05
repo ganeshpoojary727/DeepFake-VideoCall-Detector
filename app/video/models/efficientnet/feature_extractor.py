@@ -28,10 +28,17 @@ class FeatureExtractor(nn.Module):
         if x.ndim == 5:
             b, t, c, h, w = x.shape
             x_reshaped = x.view(b * t, c, h, w)
-            if hasattr(self.backbone, "extract_features"):
-                feats = self.backbone.extract_features(x_reshaped)
-            else:
-                feats = self.backbone(x_reshaped)
+            # Process in chunks of 64 frames to fully utilize 4-5GB VRAM on RTX 4050
+            chunk_size = 64
+            feats_list = []
+            for i in range(0, b * t, chunk_size):
+                chunk = x_reshaped[i : i + chunk_size]
+                if hasattr(self.backbone, "extract_features"):
+                    f = self.backbone.extract_features(chunk)
+                else:
+                    f = self.backbone(chunk)
+                feats_list.append(f)
+            feats = torch.cat(feats_list, dim=0)
             feat_dim = feats.size(-1)
             return feats.view(b, t, feat_dim)
         elif x.ndim == 4:
