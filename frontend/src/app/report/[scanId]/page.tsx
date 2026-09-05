@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import Navbar from "../../../components/Navbar";
 import VerdictGauge from "../../../components/VerdictGauge";
+import ModalityBreakdown from "../../../components/ModalityBreakdown";
 import MediaInspector from "../../../components/MediaInspector";
 import EvidenceMatrix from "../../../components/EvidenceMatrix";
 import ForensicNarrative from "../../../components/ForensicNarrative";
@@ -262,6 +263,13 @@ ${nl?.forensic_recommendations?.map((r: string) => "- " + r).join("\n") || "N/A"
           processingTimeMs={report.processing_time_ms}
           contentCategory={report.content_category}
         />
+
+        {/* ═══════════════════════════════════════════════════════════
+            DUAL-STREAM MODALITY BREAKDOWN (VIDEO VS AUDIO)
+            ═══════════════════════════════════════════════════════════ */}
+        {report.verdict !== "NOT_APPLICABLE" && (
+          <ModalityBreakdown report={report} />
+        )}
 
         {/* ═══════════════════════════════════════════════════════════
             MAIN CONTENT: INSPECTOR + EVIDENCE
