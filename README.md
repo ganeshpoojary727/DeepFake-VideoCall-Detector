@@ -67,7 +67,9 @@ Upload any media file to automatically detect synthetic manipulation, facial dee
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start & Deployment
+
+> 📖 **Deploying onto a new laptop?** Check out the step-by-step [**CLONING_AND_SETUP_GUIDE.md**](CLONING_AND_SETUP_GUIDE.md) for full instructions on copying model checkpoints, installing PyTorch CUDA/CPU, and one-click launch scripts.
 
 ### 1. Installation
 
